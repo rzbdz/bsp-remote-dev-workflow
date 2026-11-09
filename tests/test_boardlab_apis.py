@@ -247,3 +247,37 @@ def test_slots_name_boards_and_refresh_reads_the_board_swapped_into_one(host, mo
     st = _call(host, "slot_status", slot="s1")
     assert st["dut"] is None and st["reset"] == "P16" and st["history"][-1]["event"] == "removed"
     assert "has no board registered" in _call(host, "dut_reset", dut="s1", lease=token)["message"]
+
+
+def test_rebuild_forgets_probed_boards_and_slots_and_rediscovers_them(host, monkeypatch):
+    """After re-cabling: a rebuild starts the host's wiring over, and is refused while a board is leased."""
+    from bsp.dut import probe as probe_mod
+
+    mod = host.app.state.hub.modules["dut"]
+    consoles = [{"id": "uart-a", "kind": "serial-mux", "alias": "uart-a", "device": "/dev/ttyUSB0", "usb_port": "p-a", "busy": True}]
+    monkeypatch.setattr(mod.slots, "_list", lambda: consoles)
+    monkeypatch.setattr(mod.consoles, "stop", lambda alias: None)
+    spec = {"id": "k3-a", "board": "k3_deb1", "soc": "soc-b", "console": {"alias": "uart-a"}, "fastboot": {"usb": "usb:0-5"},
+            "control": {"backend": "gpio-relay", "reset": {"pin": "P16", "mode": "button", "pulse_ms": 50},
+                        "fdl": {"strategy": "strapped"}}}
+    assert _call(host, "dut_add", spec=json.dumps(spec))["slot"] == "s1"
+    token = _call(host, "dut_acquire", dut="k3-a", holder="boardlab:user:alice", ttl=600)["token"]
+    assert _call(host, "dut_rebuild")["code"] == "conflict"                    # never under someone's feet
+    _call(host, "dut_release", dut="k3-a", lease=token)
+    plan = _call(host, "dut_rebuild", dry_run=True)
+    assert plan["forget_duts"] == ["k3-a"] and "mock-board" in plan["keep_duts"]  # the site catalog's DUTs stay
+
+    # Re-cabled: the adapter now sits in another USB port, under a new console; the reset line is still P16.
+    consoles[:] = [{"id": "uart-b", "kind": "serial-mux", "alias": "uart-b", "device": "/dev/ttyUSB3", "usb_port": "p-b", "busy": True}]
+    found = []
+
+    def fake_run(self, log):
+        found.append(self._name_on("P16"))
+        return {"registered": [], "proposals": [], "reasons": []}
+
+    monkeypatch.setattr(probe_mod.Prober, "run", fake_run)
+    job = _call(host, "job_get", id=_call(host, "dut_rebuild")["job"], wait=10)
+    assert job["status"] == "succeeded", job
+    assert job["result"]["forgot"] == ["k3-a"] and "k3-a" not in mod.boards
+    assert [(s["id"], s["alias"]) for s in mod.slots.all() if s["alias"] != "mock-slot"] == [("s1", "uart-b")]
+    assert found == ["k3-a"]                       # the probe would give the board on P16 its old name

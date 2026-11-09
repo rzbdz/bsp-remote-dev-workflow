@@ -74,7 +74,9 @@ class BootRunner:
                     f"no sign of download mode within {timeout:g}s: neither the boot ROM's banner on the console"
                     + (f" (/{self.download_mode['console']}/)" if self.download_mode.get("console") else "")
                     + f" nor its download device on {self.fb.usb}",
-                    hint="see `bsp dut log <dut>`; the board may be in another stage",
+                    hint="if the host was re-cabled lately (consoles or reset lines moved), its wiring is stale: "
+                         "rebuild it (`bsp probe --rebuild -r <host> --yes`); otherwise see "
+                         "`bsp dut log <dut>`, the board may be in another stage",
                     details={"console_tail": "\n".join(self.console.tail(15))})
             time.sleep(0.3)
         dev = self.wait_fastboot(self.download_mode.get("fastboot") or ".", timeout, log)

@@ -8,8 +8,10 @@ download mode enumerates on, and the DUT, the board identity registered there.
 
 Slots outlive the boards in them. Removing a DUT leaves its slot; registering a board on the slot's console
 puts it back. Each slot remembers which reset lines, download ports and boards it had (its history), which the
-probe uses to try likely reset lines first. A slot whose adapter was unplugged stays known as offline until it
-comes back, or is forgotten.
+probe uses to try likely reset lines first. When an adapter is unplugged, its slot goes away if it held no
+board; one that held a board stays, offline, until the board is removed or the host is rebuilt (`rebuild`:
+after re-cabling, every slot is made again from the adapters plugged in now). What a dropped slot knew stays
+as history for the probe.
 
 References: `s3` on its host, `<host>/s3` across the fleet.
 """
@@ -65,10 +67,11 @@ class SlotTable:
                 data = {}
         self._slots: dict[str, dict[str, Any]] = data.get("slots") or {}
         self._next = int(data.get("next") or 1)
+        self._past: list[dict[str, Any]] = data.get("past") or []    # history of slots dropped by a rebuild
 
     def _save(self) -> None:
         tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"next": self._next, "slots": self._slots}, indent=2))
+        tmp.write_text(json.dumps({"next": self._next, "slots": self._slots, "past": self._past}, indent=2))
         tmp.replace(self.path)
 
     def _new(self, **fields: Any) -> dict[str, Any]:
@@ -83,9 +86,11 @@ class SlotTable:
         return bool(device) and any(fnmatch.fnmatch(device, pat) for pat in self.exclude)
 
     # ------------------------------------------------------------- discovery --
-    def refresh(self) -> dict[str, Any]:
+    def refresh(self, in_use: Callable[[str], str | None] | None = None) -> dict[str, Any]:
         """Match the host's consoles to slots: new adapters become new slots (with a serial-mux daemon when
-        `auto_console`), known ones are online again, missing ones offline. Returns what changed."""
+        `auto_console`), known ones are online again. A slot whose adapter is gone is dropped when it holds no board
+        (`in_use(alias)` names the board), and kept offline when it does, until the board is removed or the host
+        rebuilt. Returns what changed; `gone` are the aliases of dropped slots, whose daemons the caller stops."""
         consoles = self._list()
         added, started, failed = [], [], []
         with self._lock:
@@ -125,9 +130,19 @@ class SlotTable:
                     except Exception as e:  # noqa: BLE001 - a console that will not start is reported, not fatal
                         failed.append({"slot": slot["id"], "device": device, "error": str(e)[:200]})
             self._live = live
-            if added or started:
+            gone = []
+            if in_use is not None:
+                for sid, slot in list(self._slots.items()):
+                    # A daemon whose adapter is gone (serial-mux keeps it, waiting) is not a live adapter.
+                    if (live.get(sid) or {}).get("device") or in_use(slot.get("alias") or ""):
+                        continue
+                    past = [h for h in slot.get("history", []) if h.get("reset") or h.get("dut")]
+                    self._past = (self._past + past)[-HISTORY * 4:]
+                    gone.append({"id": sid, "alias": slot.get("alias")})
+                    self._slots.pop(sid)
+            if added or started or gone:
                 self._save()
-        return {"added": added, "started": started, "failed": failed}
+        return {"added": added, "started": started, "failed": failed, "gone": gone}
 
     def _by_port(self, port: str | None) -> dict[str, Any] | None:
         return next((s for s in self._slots.values() if port and s.get("port") == port), None)
@@ -158,6 +173,9 @@ class SlotTable:
         """Reset lines any slot ever had, most recent first."""
         seen: dict[str, float] = {}
         with self._lock:
+            for h in self._past:
+                if h.get("reset"):
+                    seen[h["reset"]] = max(seen.get(h["reset"], 0), h.get("at", 0))
             for s in self._slots.values():
                 for h in s.get("history", []):
                     if h.get("reset"):
@@ -165,6 +183,15 @@ class SlotTable:
                 if s.get("reset"):
                     seen.setdefault(s["reset"], s.get("created", 0))
         return [p for p, _ in sorted(seen.items(), key=lambda kv: -kv[1])]
+
+    def name_on(self, reset: str) -> str | None:
+        """The board most recently registered with this reset line, in any slot, past or present."""
+        best: tuple[float, str] | None = None
+        with self._lock:
+            for h in self._past + [h for s in self._slots.values() for h in s.get("history", [])]:
+                if h.get("reset") == reset and h.get("dut") and (best is None or h.get("at", 0) >= best[0]):
+                    best = (h.get("at", 0), h["dut"])
+        return best[1] if best else None
 
     def last_dut(self, sid: str) -> str | None:
         """The name of the board last registered in a slot."""
@@ -192,6 +219,30 @@ class SlotTable:
             if slot:
                 slot["alias"] = new
                 self._save()
+
+    def rebuild(self, keep: Callable[[dict[str, Any]], bool]) -> dict[str, Any]:
+        """Start over after the host was re-cabled: drop every slot `keep` does not hold on to, keeping what they
+        knew (their reset lines, download ports and boards) as history for the probe to try first. The next
+        refresh makes a slot of each adapter as it is plugged in now. Returns the aliases of the dropped slots."""
+        with self._lock:
+            dropped, history = [], []
+            for sid, slot in list(self._slots.items()):
+                if keep(slot):
+                    continue
+                past = list(slot.get("history", []))
+                if slot.get("reset") or slot.get("usb"):
+                    past.append({"event": "rebuilt", "at": time.time(), "reset": slot.get("reset"),
+                                 "usb": slot.get("usb"), "control": slot.get("control")})
+                history += [h for h in past if h.get("reset") or h.get("dut")]
+                dropped.append({"id": sid, "alias": slot.get("alias")})
+                self._slots.pop(sid)
+            # What the dropped slots knew, kept host-wide: the probe tries these reset lines and names first.
+            self._past = (getattr(self, "_past", []) + history)[-HISTORY * 4:]
+            if not self._slots:
+                self._next = 1
+            self._live = {k: v for k, v in self._live.items() if k in self._slots}
+            self._save()
+        return {"dropped": dropped}
 
     def forget(self, ref: str, in_use: Callable[[str], str | None]) -> dict[str, Any]:
         slot = self.get(ref)

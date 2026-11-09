@@ -428,8 +428,9 @@ class Prober:
         alias = con.get("alias")
         sid = con.get("slot")
         # A board found on a slot that had one before most likely is that board again (re-cabled, or re-registered).
-        name = ident.get("name_hint") or (self._last_name(sid) if sid else None) or \
-            f"{soc or 'unknown'}-{sid or 'board'}"
+        pin = (hit.get("pin") or {}).get("target")
+        name = ident.get("name_hint") or (self._name_on(pin) if pin else None) or \
+            (self._last_name(sid) if sid else None) or f"{soc or 'unknown'}-{sid or 'board'}"
         # empty = every SDK target of this SoC (resolved by the host at use time)
         sdks = self.default_sdks or (self.cfg.get("default_sdks") or {}).get(soc, [])
         spec = {
@@ -458,6 +459,11 @@ class Prober:
         if not hit["fdl"] and not hit["pin"]:
             warnings.append("no download-mode signature seen: check with `bsp dut status` after the first reset")
         return {"spec": spec, "warnings": warnings, "evidence": hit["console_text"]}
+
+    def _name_on(self, pin: str) -> str | None:
+        """The board this reset line belonged to before (after re-cabling, the same board is likely still on it)."""
+        slots = getattr(self.mod, "slots", None)
+        return slots.name_on(pin) if slots is not None else None
 
     def _last_name(self, sid: str) -> str | None:
         try:

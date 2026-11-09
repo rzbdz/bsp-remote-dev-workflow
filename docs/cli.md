@@ -64,8 +64,15 @@ is plugged into, gets a slot and a serial-mux console of its own as soon as the 
 reset line, a download port and a board are attached to a slot as they are learned (by `probe`,
 `bind` or `add`); a slot without them is still a console you can watch and type into, which is
 what you want while wiring a new board or debugging. Removing a board leaves its slot, and the slot
-remembers the reset lines, download ports and boards it had. A slot whose adapter is unplugged is
-offline until it comes back.
+remembers the reset lines, download ports and boards it had. When an adapter is unplugged, its slot
+goes away if it held no board; a slot holding a board stays, offline, so the board shows as
+unreachable until it comes back, is removed, or the host is rebuilt.
+
+After re-cabling a host (consoles in other USB ports, boards moved), rebuild it:
+`bsp probe --rebuild -r HOST --yes`. Every board the probe registered and every slot is forgotten.
+Each adapter plugged in now gets a fresh slot, and every board is found again, trying the reset
+lines boards used before first and giving each its old name back. Boards from the site's `duts/`
+stay. It refuses to start while a board on the host is leased or busy.
 
 | Command | Purpose |
 |---|---|
@@ -126,6 +133,7 @@ whether the daemon is up as `console_up`.
 | `bsp hosts` | Reachable hosts, how they are reached, their modules and boards |
 | `bsp -r REGISTRY registry list [--all]` | Hosts that announced themselves to a registry (see [configuration.md](configuration.md#host-registry)) |
 | `bsp init` | First-run check: configuration directory, mode, hosts |
+| `bsp probe --rebuild -r HOST [--yes] [--no-identify] [--sdks LIST]` | After re-cabling: forget the host's probed boards and slots, then rediscover every board (without `--yes`: say what would be forgotten) |
 | `bsp probe [--slots S..] [--pins P..] [--known] [--register] [--sdks LIST] [--dry-run] [--yes] [--no-identify] [--replace]` | Discover the boards on free slots (pulses GPIO lines — see [getting-started.md](getting-started.md#option-a-probe-boards-wired-to-gpio-reset-lines)). Lines slots had before are tried first, so re-cabled or re-registered boards come back fast (`--known`: only those); a line that made several consoles speak is tried again at the end. `--register` (implied by `--yes`) registers each board on its host the moment it is found, named after what identify read, else after the board its slot had last |
 | `bsp -r HOST probe --human [--rounds N] [--wait S] [--consoles C..] [--yes]` | Discover boards without reset wiring: a person puts one unregistered board at a time into download mode, and bsp pairs the console that speaks with the USB port that appears; each becomes a slot reset by a person, as with `dut bind` |
 | `bsp remote list\|show\|add\|remove\|use` | Manage personal host entries |

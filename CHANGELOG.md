@@ -18,6 +18,9 @@ All notable changes to this project are documented here. The format follows
   slots; `--known` only tries reset lines slots had before. Hosts tell the registry about new
   boards and slots at once.
 
+- `bsp probe --rebuild -r HOST`: after re-cabling, forget the host's probed boards and slots and
+  rediscover every board, trying the reset lines they used before first and keeping their names.
+  A slot whose adapter is unplugged goes away unless a board is registered on it.
 - The registry shares its site's SoC profiles, hooks and their images: hosts that announce there
   follow them as a layer above their site, and `bsp catalog sync` brings them to a client.
 - Media boot: a board whose FDL strap is held down can boot its own media when its SoC profile (or

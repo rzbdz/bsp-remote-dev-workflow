@@ -171,6 +171,15 @@ def build_commands(mod: "DutModule") -> list[Command]:
             lambda: {**mod.refresh_slots(), "slots": mod.slot_list()}, render=lambda r: _render_slots(r["slots"])),
         cmd("slot.forget", "Forget a slot whose adapter is gone (stops its console daemon)",
             mod.slot_forget, [SLOT]),
+        cmd("dut.rebuild", "After re-cabling the host: forget its probed DUTs and slots, then rediscover every board "
+                           "(reset lines used before first, old names kept)",
+            mod.rebuild,
+            [Param("identify", "boolean", "boot U-Boot to read each board's identity", required=False, default=True),
+             Param("sdks", help="comma list of sdks the found boards run (default by soc)", required=False),
+             Param("dry_run", "boolean", "only say what would be forgotten", required=False, default=False)],
+            render=lambda r: (f"rebuild job {r['job']} on {r['host']}: " if "job" in r else f"{r['host']} would ")
+            + f"forget {', '.join(r['forget_duts']) or 'no DUTs'}"
+            + (f", keep {', '.join(r['keep_duts'])} (site catalog)" if r["keep_duts"] else "")),
     ]
     # Any DUT can be named by its slot: `s3`, or `<host>/s3`.
     for c in cmds:

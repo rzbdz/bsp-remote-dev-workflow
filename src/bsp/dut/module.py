@@ -163,11 +163,14 @@ class DutModule(Module):
     def refresh_slots(self) -> dict[str, Any]:
         """Match the host's consoles to slots now (new adapters get a slot and a console of their own)."""
         try:
-            change = self.slots.refresh()
+            change = self.slots.refresh(lambda alias: next((i for i, b in self.boards.items() if b.spec.console_alias == alias), None))
         except BspError as e:
             self._event("error", error=e.to_dict(), what="slot refresh")
             return {"error": e.message}
-        if change["added"] or change["failed"]:
+        for slot in change.get("gone", []):
+            if slot.get("alias"):
+                self.consoles.stop(slot["alias"])
+        if change["added"] or change["failed"] or change.get("gone"):
             self._event("slots", **change)
         return change
 
@@ -272,8 +275,14 @@ class DutModule(Module):
                 "console_attach": f"{self.smtty} {b.console.alias}",     # interactive: run this on the host
                 "console_socket": str(self.consoles.socket(b.console.alias)),   # `bsp dut pipe` connects here
                 "console_up": self.consoles.up(b.console.alias), "slot": self.slot_of(dut),
+                # its slot's adapter is plugged in (False: unplugged or moved, the host may need a rebuild)
+                "slot_online": self._slot_online(b),
                 # how a plain reset boots its media: `reset` (FDL not strapped), the SoC's media boot, or not at all
                 "media_boot": self._media_state(b)}
+
+    def _slot_online(self, b: Board) -> bool | None:
+        slot = self.slots.by_alias(b.console.alias)
+        return self.slots.view(slot)["online"] if slot else None
 
     def _media_state(self, b: Board) -> dict[str, Any]:
         if (b.spec.control.get("fdl") or {}).get("strategy", "strapped") != "strapped":
@@ -365,7 +374,7 @@ class DutModule(Module):
             log(f"recipe from catalog revision {rev}" if rev else "recipe from the site's catalog")
             for x in overridden:
                 log(f"NOTE: {x['file']} on this host differs from the registry's {sdk} and is NOT used; "
-                    f"publish it with `boardlab registry sdk put {sdk} -f <file>` if it is the newer one")
+                    f"publish it with `bsp catalog put {sdk} -f <file>` if it is the newer one")
             return runner.run(inst, method, variant, log)
 
         job = self._start_job(dut, f"boot {sdk} [{method}]", body,
@@ -598,6 +607,54 @@ class DutModule(Module):
         job = self.ctx.jobs.start("probe", f"{self.ctx.host_id}: probe", prober.run, host=self.ctx.host_id)
         return {"job": job.id, "host": self.ctx.host_id}
 
+    def rebuild(self, identify: bool = True, sdks: str | None = None, dry_run: bool = False) -> dict[str, Any]:
+        """Start the host's wiring over after it was re-cabled: forget every probed DUT and every slot, give each
+        adapter plugged in now a fresh slot and console, then probe them all (reset lines boards used before
+        first, the boards' old names kept when identify reads the same board) and register each board as found.
+        DUTs from the site's catalog stay. Nothing starts while a DUT is leased or busy."""
+        held = sorted(d for d in self.boards if self.leases.view(d) or self._busy.get(d))
+        if held:
+            raise Conflict(f"{', '.join(held)} {'is' if len(held) == 1 else 'are'} leased or busy",
+                           hint="a rebuild resets every board on the host: release them first")
+        probed = sorted(d for d in self.boards if self.registry.origin(d) == "probed")
+        static = {self.boards[d].spec.console_alias for d in self.boards if d not in probed}
+        plan = {"host": self.ctx.host_id, "forget_duts": probed, "keep_duts": sorted(set(self.boards) - set(probed)),
+                "slots": [s["id"] for s in self.slots.all()]}
+        if dry_run:
+            return plan
+
+        def body(log) -> dict[str, Any]:
+            from .probe import Prober
+
+            for dut in probed:
+                s = self.registry.remove(dut)
+                self._drop_aliases(dut)
+                self.slots.note(s.console_alias, "removed", dut=s.id, board=s.board or None)
+                log(f"forgot {dut} (was on console {s.console_alias})")
+            self._rebuild()
+            dropped = self.slots.rebuild(lambda slot: slot.get("alias") in static)["dropped"]
+            for slot in dropped:
+                if slot.get("alias"):
+                    self.consoles.stop(slot["alias"])
+            log(f"dropped {len(dropped)} slot(s); matching the adapters plugged in now")
+            change = self.refresh_slots()
+            log(f"slots now: {', '.join(s['id'] + ('' if s['online'] else ' (offline)') for s in self.slots.all()) or 'none'}"
+                + (f"; consoles that did not start: {change.get('failed')}" if change.get("failed") else ""))
+            self._event("rebuilt", forgot=probed, slots=[s["id"] for s in self.slots.all()])
+            prober = Prober(self, pins=None, consoles=None, identify=identify,
+                            default_sdks=[s for s in (sdks or "").split(",") if s] or None, register=True)
+            result = prober.run(log)
+            return {**result, "forgot": probed}
+
+        for d in probed:
+            self._busy[d] = "rebuild"
+        try:
+            job = self.ctx.jobs.start("probe", f"{self.ctx.host_id}: rebuild", body, host=self.ctx.host_id)
+        finally:
+            for d in probed:
+                self._busy.pop(d, None)
+        return {"job": job.id, "host": self.ctx.host_id, **plan}
+
     def refresh(self, dut: str, lease: str | None, name: str | None = None, rename: bool = False,
                 board: str | None = None, soc: str | None = None) -> dict[str, Any]:
         """Re-read the board in a DUT's slot, as a job (see `_refresh`)."""
@@ -699,7 +756,8 @@ class DutModule(Module):
         return self.port_watcher.current if self.port_watcher else {}
 
     def _ports_changed(self, change: dict, now: dict) -> None:
-        # A new adapter is a new slot with its own console; one that went away leaves its slot offline.
+        # A new adapter is a new slot with its own console; one that went away drops its slot, or leaves it offline
+        # (and the card greyed) while a board is registered there.
         if any(str(x).startswith("/dev/") for x in change["added"] + change["removed"]):
             self.refresh_slots()
         self._event("ports", added=change["added"], removed=change["removed"])

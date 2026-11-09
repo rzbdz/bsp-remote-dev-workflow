@@ -162,3 +162,41 @@ def test_identify_says_why_it_was_skipped():
     lines = []
     assert probe_mod.identify_board(mod, None, True, "k3", None, lines.append) == {}
     assert lines == ["identify skipped: no download-mode USB port seen"]
+
+
+def test_an_unplugged_adapter_drops_its_empty_slot_and_greys_one_holding_a_board(tmp_path):
+    consoles = [{"id": a, "kind": "serial-mux", "alias": a, "device": f"/dev/{a}", "usb_port": f"port-{a}", "busy": True}
+                for a in ("s1", "s2")]
+    t = table(tmp_path, consoles)
+    t.refresh()
+    t.note("s1", "added", dut="k3-a", reset="P33")
+    t.note("s2", "added", dut="old", reset="P7")
+    t.note("s2", "removed", dut="old")
+    # Both adapters unplugged: serial-mux keeps s1's daemon waiting for its device; s2's is gone altogether.
+    consoles[:] = [{"id": "s1", "kind": "serial-mux", "alias": "s1", "device": None, "usb_port": "port-s1", "busy": True}]
+    change = t.refresh(lambda alias: "k3-a" if alias == "s1" else None)
+    assert change["gone"] == [{"id": "s2", "alias": "s2"}]
+    assert [s["id"] for s in t.all()] == ["s1"] and not t.all()[0]["online"]     # kept, offline: a board is there
+    assert "P7" in t.history_pins() and t.name_on("P7") == "old"              # what s2 knew is kept
+
+
+def test_rebuild_starts_the_slots_over_and_finds_the_boards_by_their_old_reset_lines(tmp_path, monkeypatch):
+    # Before: k3-a on s1 (reset P33). Then the host is re-cabled: its console moves to another USB port.
+    mod, gpio, added, slots = fake_host(tmp_path, monkeypatch, {"P33": ["s2"]}, aliases=("s1", "s2"))
+    slots.note("s1", "added", dut="k3-a", reset="P33")
+    consoles = [{"id": "s2", "kind": "serial-mux", "alias": "s2", "device": "/dev/s2", "usb_port": "port-new", "busy": True}]
+    slots._list = lambda: consoles
+    assert slots.rebuild(lambda slot: False)["dropped"] == [{"id": "s1", "alias": "s1"}, {"id": "s2", "alias": "s2"}]
+    slots.refresh()
+    assert [s["id"] for s in slots.all()] == ["s1"] and slots.all()[0]["alias"] == "s2"     # renumbered from s1
+    res = probe_mod.Prober(mod, None, None, identify=False, default_sdks=None, register=True).run(lambda l: None)
+    assert gpio.pulsed[0] == "P33"                                              # its old line first
+    assert [r["dut"] for r in res["registered"]] == ["k3-a"]                     # and its old name back
+
+
+def test_a_waiting_daemon_does_not_keep_an_empty_slot(tmp_path):
+    consoles = [{"id": "s1", "kind": "serial-mux", "alias": "s1", "device": "/dev/ttyUSB0", "usb_port": "p1", "busy": True}]
+    t = table(tmp_path, consoles)
+    t.refresh()
+    consoles[0]["device"] = None                          # unplugged: the daemon waits, the slot is empty
+    assert t.refresh(lambda alias: None)["gone"] == [{"id": "s1", "alias": "s1"}] and t.all() == []

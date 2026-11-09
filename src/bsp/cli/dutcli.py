@@ -411,6 +411,8 @@ def dut_add(fleet: Fleet, args) -> tuple[Any, str]:
 
 # --------------------------------------------------------------- probe --
 def probe(fleet: Fleet, args) -> tuple[Any, str]:
+    if getattr(args, "rebuild", False):
+        return rebuild(fleet, args)
     consoles = ",".join(x for x in (args.consoles, args.slots) if x) or None
     params = {"pins": args.pins, "consoles": consoles, "identify": not args.no_identify,
               "sdks": args.sdks, "dry_run": args.dry_run, "human": args.human, "rounds": args.rounds,
@@ -484,6 +486,28 @@ def probe(fleet: Fleet, args) -> tuple[Any, str]:
     return {"results": results, "added": added}, "\n".join(lines) or "nothing found"
 
 
+def rebuild(fleet: Fleet, args) -> tuple[Any, str]:
+    """`bsp probe --rebuild -r HOST --yes`: start the host's wiring over and rediscover its boards."""
+    hosts = fleet.require()
+    if len(hosts) != 1:
+        raise InvalidRequest("a rebuild starts one host over at a time", hint=f"pick it with -r ({', '.join(h.id for h in hosts)})")
+    h = hosts[0]
+    params = {"identify": not args.no_identify, "sdks": args.sdks, "dry_run": args.dry_run or not args.yes}
+    r = _ok(h, h.call("dut_rebuild", params))
+    if "job" not in r:
+        return r, (f"{h.id}: a rebuild would forget {', '.join(r['forget_duts']) or 'no DUTs'} and every slot, then "
+                   f"rediscover the boards. Run again with --yes to do it.")
+    out = sys.stderr if args.json else sys.stdout
+    print(f"[{h.id}] rebuilding (job {r['job']}) ...", file=out, flush=True)
+    v, _ = follow_job(h, r["job"], _Prefixed(out, f"[{h.id}]"), 1800)
+    res = v["result"]
+    lines = [f"[{h.id}] forgot {', '.join(res.get('forgot') or []) or 'no DUTs'}"]
+    lines += [f"[{h.id}] registered {e['dut']}" + (f" in slot {h.id}/{e['slot']}" if e.get("slot") else "")
+              for e in res.get("registered", [])]
+    lines += [f"[{h.id}] {reason}" for reason in res.get("reasons", [])]
+    return {"results": {h.id: res}, "added": [{"host": h.id, **e} for e in res.get("registered", [])]}, "\n".join(lines)
+
+
 class _Prefixed:
     def __init__(self, out, prefix):
         self.out, self.prefix = out, prefix
@@ -546,6 +570,9 @@ def add_parsers(sub) -> None:
     p.add_argument("--human", action="store_true",
                    help="boards without reset wiring: a person resets each unregistered board into download mode "
                         "and bsp pairs the console that speaks with the USB port that appears")
+    p.add_argument("--rebuild", action="store_true",
+                   help="after re-cabling a host: forget its probed DUTs and slots and rediscover every board "
+                        "(reset lines used before first, old names kept); needs -r and --yes")
     p.add_argument("--rounds", type=int, default=8, help="--human: at most this many boards (default 8)")
     p.add_argument("--wait", type=float, default=120, help="--human: seconds to wait for each board (default 120)")
 
