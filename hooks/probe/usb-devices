@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+"""probe/usb-devices: list USB devices that may be a board's fastboot/download port.
+
+request : {"vids": ["1d6b", ...]}      USB vendor ids to report (from the SoC profiles); empty = all non-hub devices
+result  : {"devices": [{"sysname": "2-1.2", "usb": "usb:2-1.2", "vid", "pid", "devnum", "product"}]}
+`usb` is the fastboot `-s` selector for that physical port (stable across BROM/SPL/U-Boot).
+"""
+import json
+import sys
+from pathlib import Path
+
+
+def rd(p):
+    try:
+        return p.read_text().strip()
+    except OSError:
+        return ""
+
+
+def main():
+    req = json.loads(sys.stdin.read() or "{}")
+    vids = {v.lower() for v in req.get("vids") or []}
+    out = []
+    for d in sorted(Path("/sys/bus/usb/devices").iterdir()):
+        if ":" in d.name or not (d / "idVendor").exists():
+            continue
+        vid = rd(d / "idVendor").lower()
+        if vids and vid not in vids:
+            continue
+        if not vids and rd(d / "bDeviceClass") == "09":      # skip hubs when watching everything
+            continue
+        out.append({"sysname": d.name, "usb": f"usb:{d.name}", "vid": vid, "pid": rd(d / "idProduct"),
+                    "devnum": rd(d / "devnum"), "product": rd(d / "product")})
+    print(f"{len(out)} device(s) with vid in {sorted(vids)}")
+    print(json.dumps({"devices": out}))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

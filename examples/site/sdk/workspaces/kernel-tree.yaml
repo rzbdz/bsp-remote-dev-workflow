@@ -1,0 +1,5 @@
+# One source tree building several SDK targets. Leasing any of them leases the tree.
+id: kernel-tree
+server: build-a
+path: /home/dev/work/kernel-tree
+dev_projects: ["."]

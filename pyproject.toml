@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bsp-dev-loop"
+version = "0.1.0b0"
+description = "Lease a board, build on a remote server, boot over fastboot and check the serial console: one CLI and HTTP API for embedded BSP developers and AI agents"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+keywords = ["embedded", "bsp", "linux-kernel", "u-boot", "fastboot", "hardware-in-the-loop", "board-farm", "ai-agents"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Topic :: Software Development :: Embedded Systems",
+  "Topic :: System :: Hardware",
+]
+# The board-host daemon needs Python >= 3.10. The client also runs from a clone
+# (bin/bsp) on Python >= 3.8; host commands are stdlib-only, SDK and site commands
+# need PyYAML.
+dependencies = ["pyyaml>=5.1"]
+
+[project.urls]
+Homepage = "https://github.com/rzbdz/bsp-remote-dev-workflow"
+Issues = "https://github.com/rzbdz/bsp-remote-dev-workflow/issues"
+
+[project.optional-dependencies]
+server = ["fastapi>=0.110", "uvicorn>=0.29"]
+gpiod = ["gpiod>=2.1"]
+dev = ["pytest>=7", "httpx>=0.27"]
+
+[project.scripts]
+bsp = "bsp.cli.main:main"
+bsp-hostd = "bsp.server.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"bsp.server" = ["web/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

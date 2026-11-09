@@ -1,0 +1,4 @@
+# tar --exclude-from patterns: site files that deploy.sh / install-client.sh do not ship
+# to board hosts and clients (records, notes, anything that should stay on this machine).
+e2e-results
+notes

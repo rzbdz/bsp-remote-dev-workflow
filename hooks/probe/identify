@@ -1,0 +1,133 @@
+#!/usr/bin/env python3
+"""probe/identify: identify a board that sits in download mode, driven entirely by
+its SoC profile (<site>/socs/<soc>/soc.yaml). Nothing here knows any vendor.
+
+request : {"usb": "usb:2-1.2", "fastboot": "fastboot", "console_log": "<serial-mux log dir>",
+           "soc": "<id>",
+           "profile": {"download_mode": {"fastboot": regex},
+                       "identify": {"sequence": [{"stage": <image key>, "console": regex, "fastboot": regex}, ...],
+                                    "fields": {name: regex with one group},
+                                    "placeholders": {field: [values that are not real ids]},
+                                    "name": [field or "mem", ...]},
+                       "images": {key: {"file": ..., "path": ..., "sha256": ...}}},
+           "timeout": 60}
+result  : {"soc", "fields": {name: value}, "name_hint", "stage": "identified"}
+exit 2  : the board is not in download mode, or the profile has no identify sequence
+
+Each sequence step stages an image, sends `continue`, then waits for its console regex
+(in the console log) and its fastboot regex (product of the device on `usb`). Fields
+are then extracted from everything the console printed. The name joins the `name`
+fields, slugified; `mem` is derived from `mem_gib` or `mem_mb`.
+"""
+import hashlib
+import json
+import re
+import subprocess
+import sys
+import time
+from datetime import date
+from pathlib import Path
+
+
+def fb(binary, usb, *args, timeout=60):
+    r = subprocess.run([binary, "-s", usb, *args], capture_output=True, text=True, timeout=timeout)
+    return r.returncode, (r.stdout + r.stderr)
+
+
+def product(binary, usb):
+    r = subprocess.run([binary, "devices", "-l"], capture_output=True, text=True, timeout=10)
+    lines = (r.stdout + r.stderr).splitlines()
+    for i, l in enumerate(lines):
+        nxt = lines[i + 1] if i + 1 < len(lines) else ""
+        if usb in l or usb in nxt:
+            return l
+    return ""
+
+
+def mark(log_dir):
+    p = Path(log_dir) / f"{date.today().isoformat()}.log"
+    return p, (p.stat().st_size if p.exists() else 0)
+
+
+def since(m):
+    p, off = m
+    return p.read_bytes()[off:].decode("utf-8", "replace") if p.exists() else ""
+
+
+def slug(v):
+    return re.sub(r"[^a-z0-9]+", "-", str(v).lower()).strip("-")
+
+
+def main():
+    req = json.loads(sys.stdin.read())
+    usb, binary, prof = req["usb"], req.get("fastboot", "fastboot"), req["profile"]
+    ident = prof.get("identify") or {}
+    dl = (prof.get("download_mode") or {}).get("fastboot")
+    cur = product(binary, usb)
+    if dl and not re.search(dl, cur):
+        print(f"{usb} is not in download mode ({cur.strip() or 'absent'}); refusing to stage anything")
+        print(json.dumps({"stage": "unknown", "error": "not in download mode",
+                          "hint": "reset the board into download mode first"}))
+        return 2
+    if not ident.get("sequence") or not req.get("console_log"):
+        print(json.dumps({"error": "SoC profile has no identify.sequence (or no console log)",
+                          "hint": "add identify: to the SoC profile"}))
+        return 2
+    first = mark(req["console_log"])
+    timeout = float(req.get("timeout", 60))
+    for step in ident["sequence"]:
+        img = prof["images"][step["stage"]]
+        path = Path(img.get("path") or Path(req.get("profile_dir", ".")) / img["file"])
+        if not path.is_file():
+            print(json.dumps({"error": f"probe image {img['file']} for {step['stage']} is missing",
+                              "hint": "put a known-good build in <site>/socs/<soc>/ (see the SoC profile)"}))
+            return 1
+        if img.get("sha256") and hashlib.sha256(path.read_bytes()).hexdigest() != img["sha256"]:
+            print(json.dumps({"error": f"{path} does not match its sha256 in the SoC profile"}))
+            return 1
+        m = mark(req["console_log"])
+        rc, out = fb(binary, usb, "stage", str(path), timeout=120)
+        if rc:
+            print(json.dumps({"error": f"stage {step['stage']} failed: {out[-200:]}"}))
+            return 1
+        fb(binary, usb, "continue", timeout=15)
+        t0 = time.monotonic()
+        while True:
+            ok_c = not step.get("console") or re.search(step["console"], since(m))
+            ok_f = not step.get("fastboot") or re.search(step["fastboot"], product(binary, usb) or "")
+            if ok_c and ok_f:
+                break
+            if time.monotonic() - t0 > timeout:
+                print(json.dumps({"error": f"{step['stage']}: /{step.get('console')}/ not seen within {timeout:g}s",
+                                  "hint": "check the console log; the probe images may not suit this board"}))
+                return 1
+            time.sleep(0.3)
+        print(f"{step['stage']} up after {time.monotonic() - t0:.1f}s")
+    time.sleep(float(ident.get("settle_s", 1.5)))       # let the bootloader finish printing
+    text = since(first)
+    fields = {}
+    for name, rx in (ident.get("fields") or {}).items():
+        mm = re.search(rx, text, re.M)
+        if mm:
+            fields[name] = mm.group(1).strip()
+    for name, bad in (ident.get("placeholders") or {}).items():
+        if fields.get(name, "").lower() in {str(b).lower() for b in bad}:
+            fields.pop(name)
+    mem = None
+    if fields.get("mem_gib", "").isdigit():
+        mem = int(fields["mem_gib"])
+    elif fields.get("mem_mb", "").isdigit():
+        mem = int(fields["mem_mb"]) // 1024
+    parts = []
+    for key in ident.get("name", ["product"]):
+        v = f"{mem}g" if key == "mem" and mem else fields.get(key)
+        if v:
+            parts.append(slug(v))
+    print(f"fields: {fields}")
+    print(json.dumps({"soc": req.get("soc"), "stage": "identified", "fields": fields,
+                      "name_hint": "-".join(p for p in parts if p) or None}))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

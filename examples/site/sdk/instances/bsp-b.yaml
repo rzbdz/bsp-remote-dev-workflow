@@ -1,0 +1,10 @@
+id: bsp-b
+family: env-bsp
+server: build-b
+path: /home/dev/work/bsp-b
+soc: soc-c
+plat: evb                      # passed to the envsetup script
+description: example env-script BSP (boot not set up yet)
+boot:
+  load: {status: todo, notes: "how this SDK boots is not written down yet", steps: []}
+  download: {status: todo, notes: "no flash procedure yet", steps: []}

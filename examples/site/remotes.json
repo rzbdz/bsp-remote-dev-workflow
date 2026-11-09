@@ -1,0 +1,6 @@
+{
+  "_comment": "Board hosts known to every bsp user of this site. Tried in order: url, fallback_urls, then HTTP tunnelled over ssh.",
+  "remotes": {
+    "lab-1": {"url": "http://192.0.2.20:8765", "ssh": "root@192.0.2.20", "description": "example board host"}
+  }
+}

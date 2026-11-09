@@ -1,0 +1,13 @@
+# Build style: source an environment script, then call a shell function.
+id: env-bsp
+description: tree whose build is `source <envsetup> <plat>` + a shell function
+build:
+  runner: envsetup
+  envsetup: scripts/envsetup.sh
+  targets: {linux: build-linux, uboot: build-uboot, all: build-all}
+  clean: {linux: clean-linux}
+artifacts:
+  dir: "out/{plat}"
+  roles: {kernel: Image, dtb: "board_{plat}.dtb"}
+dev_projects: [linux]
+env: {path_prepend: []}

@@ -1,0 +1,8 @@
+#!/usr/bin/env python3
+"""Example site flash hook: a real one would unpack the vendor package in
+request["artifacts"]["flash-zip"] and run `fastboot -s <usb> flash <part> <image>` per partition.
+Contract: hooks/README.md in the bsp repo."""
+import json, sys
+req = json.load(sys.stdin)
+print(f"would flash {req['artifacts'].get('flash-zip')} to {req['usb']}")
+print(json.dumps({"flashed": [], "dry_run": True}))

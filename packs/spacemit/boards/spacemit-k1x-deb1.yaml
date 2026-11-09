@@ -1,0 +1,53 @@
+# Board profile: SpacemiT K1-x deb1 (26-pin expansion header)
+#
+# 26-pin expansion header. Net names from the board schematic table; GPIO pins
+# use the Linux GPIO number (k1x-gpio, base 0). Note: on K1 the pinctrl pin
+# number is NOT the GPIO number (GPIO70 = pin 71, GPIO91 = pin 128); the
+# pinmux inspector maps them via debugfs gpio-ranges.
+#
+# I2C4 / R_UART0 / SPI3 pins are modelled as `other` (not drivable): their GPIO
+# numbers are not confirmed. To use one as GPIO, change it to `{gpio: N}` once
+# the number is verified.
+id: spacemit-k1x-deb1
+name: SpacemiT K1-x deb1
+description: K1-x deb1 board, 26-pin expansion header (3.3 V I/O).
+
+headers:
+  - id: J26
+    title: 26-pin expansion header
+    layout: dual-row
+    pin_count: 26
+    pins:
+      1:  {kind: power, label: 3.3V}          # VCC3V3_SYS
+      2:  {kind: power, label: 5V}            # VCC5V0_OUT
+      3:  {kind: other, label: I2C4_SDA}      # AP_I2C4_SDA_3V3
+      4:  {kind: power, label: 5V}            # VCC5V0_OUT
+      5:  {kind: other, label: I2C4_SCL}      # AP_I2C4_SCL_3V3
+      6:  {kind: gnd, label: GND}
+      7:  {gpio: 70}                          # GPIO_70_3V3
+      8:  {kind: other, label: R_UART0_TXD}   # R_UART0_TXD_3V3
+      9:  {kind: gnd, label: GND}
+      10: {kind: other, label: R_UART0_RXD}   # R_UART0_RXD_3V3
+      11: {gpio: 71}                          # GPIO_71_3V3
+      12: {gpio: 74}                          # GPIO_74_3V3
+      13: {gpio: 72}                          # GPIO_72_3V3
+      14: {kind: gnd, label: GND}
+      15: {gpio: 73}                          # GPIO_73_3V3
+      16: {gpio: 91}                          # GPIO_91_3V3
+      17: {kind: power, label: 3.3V}          # VCC3V3_SYS
+      18: {gpio: 92}                          # GPIO_92_3V3
+      19: {kind: other, label: SPI3_MOSI}     # SPI3_MOSI_3V3
+      20: {kind: gnd, label: GND}
+      21: {kind: other, label: SPI3_MISO}     # SPI3_MISO_3V3
+      22: {gpio: 49}                          # GPIO_49_3V3
+      23: {kind: other, label: SPI3_SCLK}     # SPI3_SCLK_3V3
+      24: {kind: other, label: SPI3_CS}       # SPI3_CS_3V3
+      25: {kind: gnd, label: GND}
+      26: {gpio: 50}                          # GPIO_50_3V3
+
+gpio:
+  numbering: global          # k1x-gpio: single 128-line chip at base 0
+
+# Only pinmux-pins and gpio-ranges are read (never pinconf-pins / pins).
+pinctrl:
+  debugfs: /sys/kernel/debug/pinctrl/d401e000.pinctrl-pinctrl-single

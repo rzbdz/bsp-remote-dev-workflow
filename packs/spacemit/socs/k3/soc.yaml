@@ -1,0 +1,42 @@
+# SpacemiT K3 SoC profile: facts fixed in silicon / vendor bootloader output.
+# Probe images are not shipped: put known-good builds in <site>/socs/k3/ (same file names),
+# optionally with a soc.yaml adding `images: {key: {sha256: ...}}`.
+soc: k3
+fingerprint:
+- 'sys: 0x10001200'
+- 'usb_init : enter'
+- DWC3_GRXTHRCFG
+- usb_core_init
+- setup= 0x
+download_mode:
+  console: 'ROM: usb download handler'
+  fastboot: DFU download
+usb_vids:
+- 361c
+identify:
+  sequence:
+  - stage: fsbl
+    console: U-Boot SPL 20
+    fastboot: Android Fastboot
+  - stage: uboot
+    console: U-Boot 20\d\d\.\d+\S* \(
+    fastboot: Fastboot
+  fields:
+    product: 'TLV item: product_name = (.*?)\s*$'
+    serial: 'TLV item: serial# = (.*?)\s*$'
+    model: Model:\s*(.+?)\s*$
+    mem_gib: DRAM:\s*(\d+) GiB
+  placeholders:
+    serial:
+    - ssd
+    - none
+    - '0'
+  name:
+  - product
+  - mem
+  - serial
+images:
+  fsbl:
+    file: FSBL.bin
+  uboot:
+    file: u-boot-opensbi.itb

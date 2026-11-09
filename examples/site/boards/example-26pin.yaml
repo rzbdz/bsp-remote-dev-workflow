@@ -1,0 +1,84 @@
+# Example board profile (header pin map). Copy and edit for a real board.
+id: example-26pin
+name: Example SBC (26-pin header)
+description: 'Example SBC (26-pin header): a made-up host controller board. Pins name
+  Linux GPIO numbers.'
+headers:
+- id: J26
+  title: 26-pin expansion header
+  layout: dual-row
+  pin_count: 26
+  pins:
+    1:
+      kind: power
+      label: 3.3V
+    2:
+      kind: power
+      label: 5V
+    3:
+      kind: other
+      label: I2C_SDA
+    4:
+      kind: power
+      label: 5V
+    5:
+      kind: other
+      label: I2C_SCL
+    6:
+      kind: gnd
+      label: GND
+    7:
+      gpio: 70
+    8:
+      kind: other
+      label: UART_TXD
+    9:
+      kind: gnd
+      label: GND
+    10:
+      kind: other
+      label: UART_RXD
+    11:
+      gpio: 71
+    12:
+      gpio: 74
+    13:
+      gpio: 72
+    14:
+      kind: gnd
+      label: GND
+    15:
+      gpio: 73
+    16:
+      gpio: 91
+    17:
+      kind: power
+      label: 3.3V
+    18:
+      gpio: 92
+    19:
+      kind: other
+      label: SPI_MOSI
+    20:
+      kind: gnd
+      label: GND
+    21:
+      kind: other
+      label: SPI_MISO
+    22:
+      gpio: 49
+    23:
+      kind: other
+      label: SPI_SCLK
+    24:
+      kind: other
+      label: SPI_CS
+    25:
+      kind: gnd
+      label: GND
+    26:
+      gpio: 50
+gpio:
+  numbering: global
+pinctrl:
+  debugfs: /sys/kernel/debug/pinctrl/example-pinctrl

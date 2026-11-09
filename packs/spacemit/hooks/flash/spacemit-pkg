@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""flash/spacemit-pkg: flash a SpacemiT pack_image zip over fastboot (vendor order).
+
+The board must already run a U-Boot that answers fastboot (the recipe stages it).
+request : {"usb": "usb:2-1.2", "fastboot": "fastboot",
+           "artifacts": {"flash-zip": "/path/spacemit_k3_flash_image_*.zip"},
+           "args": {"media": ["mtd", "gpt"], "skip": ["rootfs"], "dry_run": false}}
+result  : {"flashed": [{"layout": "partition_4M.json", "partition": "fsbl", "image": "...", "s": 1.2}, ...],
+           "layouts": [...], "seconds": 93.1}
+Layout files follow fastboot.yaml `multi_flash`: partition_<getvar mtd-size>.json for NOR (format mtd)
+and partition_<getvar blk-size>.json for block media (format gpt); a layout is written first
+(`fastboot flash mtd|gpt <json>`), then every partition that has an image in the package.
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import time
+import zipfile
+
+
+def fb(binary, usb, *args, timeout=900):
+    r = subprocess.run([binary, "-s", usb, *args], capture_output=True, text=True, timeout=timeout)
+    out = (r.stdout + r.stderr).strip()
+    return r.returncode, out
+
+
+def getvar(binary, usb, name):
+    rc, out = fb(binary, usb, "getvar", name, timeout=15)
+    m = re.search(rf"^{re.escape(name)}:\s*(\S+)", out, re.M)
+    return m.group(1) if m and rc == 0 else None
+
+
+def main():
+    req = json.loads(sys.stdin.read())
+    usb, binary = req["usb"], req.get("fastboot", "fastboot")
+    args = req.get("args") or {}
+    media = args.get("media", ["mtd", "gpt"])
+    skip = set(args.get("skip", []))
+    pkg = (req.get("artifacts") or {}).get("flash-zip")
+    if not pkg or not os.path.exists(pkg):
+        print(json.dumps({"error": "no flash-zip artifact", "hint": "build it: bsp sdk build <sdk> pack-image"}))
+        return 1
+    t0 = time.monotonic()
+    work = tempfile.mkdtemp(prefix="bsp-flash-")
+    with zipfile.ZipFile(pkg) as z:
+        z.extractall(work)
+    print(f"unpacked {os.path.basename(pkg)} ({len(os.listdir(work))} entries)")
+
+    sizes = {"mtd": getvar(binary, usb, "mtd-size"), "gpt": getvar(binary, usb, "blk-size")}
+    print(f"device reports mtd-size={sizes['mtd']} blk-size={sizes['gpt']}")
+    # U-Boot answers NULL for a medium the board does not have (e.g. no SPI NOR on a UFS board): skip that
+    # medium. No answer at all (an older U-Boot) still falls back to the package's layouts.
+    absent = {fmt for fmt, v in sizes.items() if v is not None and v.upper() in ("NULL", "NONE")}
+    def mib(v):
+        m = re.fullmatch(r"(\d+)([KMG])", v or "")
+        return int(m.group(1)) * {"K": 1 / 1024, "M": 1, "G": 1024}[m.group(2)] if m else None
+
+    layouts = []
+    for fmt in media:
+        if fmt in absent:
+            print(f"device has no {fmt} medium ({'mtd' if fmt == 'mtd' else 'blk'}-size={sizes[fmt]}); skipping {fmt}")
+            continue
+        cand = []
+        if sizes.get(fmt):
+            cand.append(f"partition_{sizes[fmt]}.json")
+        sized = []
+        for name in sorted(os.listdir(work)):
+            if name.startswith("partition_") and name.endswith(".json"):
+                size = mib(name[len("partition_"):-len(".json")])
+                sized.append((size, name))
+        dev = mib(sizes.get(fmt))
+        # exact match first; else the largest sized layout that fits the device; then the rest
+        fits = sorted((s, n) for s, n in sized if s is not None and (dev is None or s <= dev))
+        cand += [n for _, n in reversed(fits)] + [n for s, n in sized if s is None]
+        if dev and f"partition_{sizes[fmt]}.json" not in os.listdir(work) and fits:
+            print(f"no partition_{sizes[fmt]}.json in package; using {fits[-1][1]} (largest layout <= {sizes[fmt]})")
+        for name in cand:
+            p = os.path.join(work, name)
+            if os.path.exists(p) and json.load(open(p)).get("format") == fmt:
+                layouts.append((fmt, name))
+                break
+        else:
+            print(f"no {fmt} layout in package or device has no {fmt} medium; skipping {fmt}")
+    if not layouts:
+        print(json.dumps({"error": "no usable partition layout", "hint": "is U-Boot (not SPL) answering fastboot?"}))
+        return 1
+
+    flashed, failed = [], []
+    for fmt, name in layouts:
+        table = json.load(open(os.path.join(work, name)))
+        plan = [(fmt, os.path.join(work, name))] + [
+            (p["name"], os.path.join(work, p["image"])) for p in table["partitions"]
+            if p.get("image") and p["name"] not in skip]
+        for part, image in plan:
+            if not os.path.exists(image):
+                print(f"skip {part}: {os.path.relpath(image, work)} not in package")
+                continue
+            if args.get("dry_run"):
+                print(f"[dry-run] fastboot flash {part} {os.path.relpath(image, work)}")
+                continue
+            ts = time.monotonic()
+            rc, out = fb(binary, usb, "flash", part, image)
+            secs = round(time.monotonic() - ts, 1)
+            rel = os.path.relpath(image, work)
+            if rc != 0 or "FAILED" in out:
+                print(f"FAILED {name}: flash {part} {rel}: {out[-200:]}")
+                failed.append({"layout": name, "partition": part, "error": out[-300:]})
+                break
+            print(f"{name}: flash {part} <- {rel} ({os.path.getsize(image):,} B) {secs}s")
+            flashed.append({"layout": name, "partition": part, "image": rel, "s": secs})
+    result = {"flashed": flashed, "failed": failed, "layouts": [n for _, n in layouts],
+              "seconds": round(time.monotonic() - t0, 1), "package": os.path.basename(pkg)}
+    if failed:
+        result["error"] = f"flashing {failed[0]['partition']} failed"
+        result["hint"] = "check the console log; the staged U-Boot must support this medium"
+        print(json.dumps(result))
+        return 1
+    print(json.dumps(result))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,4 @@
+id: build-b
+host: 192.0.2.11
+user: dev
+description: second example build server

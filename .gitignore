@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+build/
+dist/
+# local runtime state when running the server on a dev machine
+/var/
+# e2e run records (host names, console logs): keep them in the site repo
+e2e-material/results/

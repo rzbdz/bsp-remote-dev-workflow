@@ -1,0 +1,4 @@
+# Site settings (optional).
+# packs: hardware packs from the bsp repo's packs/ directory this site builds on.
+# Omit the key to use every pack; [] to use none.
+packs: [spacemit]

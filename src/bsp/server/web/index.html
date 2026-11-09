@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bsp hostd · GPIO</title>
+<link rel="stylesheet" href="/static/style.css?v=__V__">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="logo">bsp</span><span class="sub">hostd</span></div>
+  <div class="meta" id="meta">
+    <span class="chip" id="m-host">…</span>
+    <span class="chip" id="m-backend">backend …</span>
+    <span class="chip" id="m-pinmux">pinmux …</span>
+    <span class="chip" id="m-ver"></span>
+  </div>
+  <div class="conn"><span class="dot" id="conn-dot"></span><span id="conn-text">connecting</span></div>
+  <button class="ghost small" id="token-btn" hidden>token</button>
+</header>
+
+<div class="banner" id="banner" hidden></div>
+
+<main class="layout">
+  <section class="panel board-panel">
+    <div class="panel-head">
+      <h2 id="board-title">Header</h2>
+      <div class="legend">
+        <span><i class="sw k-power3"></i>3.3V</span>
+        <span><i class="sw k-power5"></i>5V</span>
+        <span><i class="sw k-gnd"></i>GND</span>
+        <span><i class="sw k-gpio"></i>GPIO</span>
+        <span><i class="led h"></i>H</span>
+        <span><i class="led l"></i>L</span>
+        <span><i class="led z"></i>Hi-Z</span>
+        <span><i class="led u"></i>unclaimed</span>
+        <span><b class="warn-mark">!</b>pad muxed</span>
+      </div>
+    </div>
+    <div id="headers"></div>
+  </section>
+
+  <section class="panel inspector" id="inspector">
+    <div class="empty">← select a pin</div>
+  </section>
+
+  <section class="panel dock">
+    <nav class="tabs">
+      <button class="tab active" data-tab="console">Remote CLI</button>
+      <button class="tab" data-tab="events">Events <span class="count" id="ev-count">0</span></button>
+      <button class="tab" data-tab="api">API / AI</button>
+    </nav>
+    <div class="tabpane" id="tab-console">
+      <pre class="console-out" id="console-out"></pre>
+      <form class="console-in" id="console-form" autocomplete="off">
+        <span class="prompt">bsp&gt;</span>
+        <input id="console-input" spellcheck="false" placeholder="help | gpio list | gpio set P33 low | button click DUT1/reset --ms 300 | gpio alias list">
+      </form>
+    </div>
+    <div class="tabpane" id="tab-events" hidden>
+      <div class="events" id="events"></div>
+    </div>
+    <div class="tabpane" id="tab-api" hidden>
+      <div class="api-links">
+        <a href="/docs" target="_blank">OpenAPI docs</a>
+        <a href="/llms.txt" target="_blank">llms.txt</a>
+        <a href="/api/v1/tools?format=anthropic" target="_blank">tools (anthropic)</a>
+        <a href="/api/v1/tools?format=openai" target="_blank">tools (openai)</a>
+        <a href="/api/v1/events" target="_blank">SSE events</a>
+      </div>
+      <div class="table-wrap"><table class="api-table" id="api-table"></table></div>
+    </div>
+  </section>
+</main>
+
+
+
+<div class="toasts" id="toasts"></div>
+<script src="/static/app.js?v=__V__"></script>
+</body>
+</html>

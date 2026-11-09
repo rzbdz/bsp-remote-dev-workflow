@@ -1,0 +1,14 @@
+# A slot bound with `bsp dut bind`: console + USB download port, no GPIO wiring.
+# Resets are done by a person; `bsp dut confirm mock-slot` tells the waiting job.
+id: mock-slot
+host: dev-mock
+board: board-x
+soc: soc-b
+description: bound slot on the mock host (manual reset)
+console: {alias: mock-slot}
+fastboot: {usb: "usb:0-1"}
+control:
+  backend: human
+  fdl: {strategy: strapped}
+  human: {timeout_s: 120}
+sdks: []

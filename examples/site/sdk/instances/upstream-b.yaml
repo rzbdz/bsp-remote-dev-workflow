@@ -1,0 +1,10 @@
+id: upstream-b
+family: kernel-script
+workspace: kernel-tree
+soc: soc-a
+board: board-y
+description: upstream kernel for soc-a boards (planned)
+artifacts_dir: staging-b
+boot:
+  load: {status: todo, notes: "needs a staging dir with soc-a bootloaders", steps: []}
+  download: {status: todo, notes: not planned, steps: []}

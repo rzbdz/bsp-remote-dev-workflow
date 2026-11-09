@@ -1,0 +1,4 @@
+[submodule "third_party/serial-mux"]
+	path = third_party/serial-mux
+	url = https://github.com/rzbdz/serial-mux.git
+	branch = bsp/usb-port-reconnect

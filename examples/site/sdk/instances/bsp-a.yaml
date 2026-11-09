@@ -1,0 +1,34 @@
+id: bsp-a
+family: make-bsp
+server: build-a                # no `workspace:` -> owns an implicit one (server + path)
+path: /home/dev/work/bsp-a
+soc: soc-a
+description: example vendor BSP for soc-a
+boot:
+  load:                        # RAM boot over fastboot; nothing written to storage
+    status: ready
+    steps:
+      - {do: enter-fdl}        # reset into download mode (the SoC profile says what it looks like)
+      - {do: stage, artifact: fsbl}
+      - {do: continue}
+      - {do: wait, serial: "SPL", fastboot: "Fastboot", timeout: 60}
+      - {do: stage, artifact: uboot-sbi}
+      - {do: continue}
+      - {do: wait, serial: "U-Boot 20", fastboot: "Fastboot", timeout: 60}
+      - {do: stage, artifact: kernel-fit, stop_if: uboot-only}
+      - {do: continue}
+      - {do: wait, serial: "# $|login:", fail: "Kernel panic", timeout: 120, nudge: 10}   # Enter after 10 s quiet
+    variants: {uboot-only: stop once U-Boot answers fastboot}
+  download:                    # flash to storage, then cold boot
+    status: ready
+    steps:
+      - {do: enter-fdl}
+      - {do: stage, artifact: fsbl}
+      - {do: continue}
+      - {do: wait, fastboot: "Fastboot", timeout: 60}
+      - {do: stage, artifact: uboot-itb}
+      - {do: continue}
+      - {do: wait, fastboot: "Fastboot", timeout: 60}
+      - {do: hook, kind: flash, name: example-pkg, artifacts: [flash-zip], timeout: 1800}
+      - {do: reset, when: fdl-not-strapped, why: cold boot the flashed media}
+      - {do: wait, when: fdl-not-strapped, serial: "login:", timeout: 180}

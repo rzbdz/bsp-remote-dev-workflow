@@ -1,0 +1,12 @@
+# Static DUT (optional; `bsp probe` registers boards on their host instead).
+id: example-board
+host: lab-1
+board: board-x
+soc: soc-b
+console: {alias: example-board}          # serial-mux alias on the host
+fastboot: {usb: "usb:1-1.2"}             # `fastboot devices -l` selector
+control:
+  backend: gpio-relay                    # gpio-relay | human (alias: manual) | home-assistant (stub)
+  reset: {pin: P33, mode: button, pulse_ms: 1000}
+  fdl: {strategy: strapped}              # strapped (reset == download mode) | button (+ pin)
+sdks: []                                 # empty = every SDK target of its SoC

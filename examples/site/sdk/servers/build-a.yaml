@@ -1,0 +1,8 @@
+id: build-a
+host: 192.0.2.10
+user: dev
+description: example build server
+home_aliases: [/home/dev, /data/home/dev]   # the same tree under two spellings
+env:                                        # what an interactive login would set up for build jobs
+  path_prepend: ["~/toolchains/riscv/bin"]
+  vars: {}

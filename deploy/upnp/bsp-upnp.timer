@@ -1,0 +1,10 @@
+[Unit]
+Description=bsp UPnP port registration refresh (hourly)
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=1h
+Unit=bsp-upnp.service
+
+[Install]
+WantedBy=timers.target

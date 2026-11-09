@@ -1,0 +1,18 @@
+# Build style: a BSP tree with a top-level Makefile (`make <target>` at the tree root).
+id: make-bsp
+description: BSP tree with a top-level Makefile; flat output/ directory
+build:
+  runner: make                 # cd <path> [&& pre] && make <target>
+  targets: {all: all, uboot: uboot, opensbi: opensbi, kernel: kernel, dtb: dtb, pack-image: pack_image}
+  clean: {uboot: clean_uboot, kernel: clean_kernel, all: clean}
+artifacts:
+  dir: output
+  roles:                       # role -> file name; boot recipes refer to roles
+    fsbl: FSBL.bin
+    uboot-sbi: u-boot-opensbi.itb
+    uboot-itb: u-boot.itb
+    kernel-fit: Image.itb
+    flash-zip: "flash_image_*.zip"   # globs resolve to the newest match
+dev_projects: [linux]          # repos inside the tree that `sdk acquire` stashes + branches
+env: {path_prepend: []}
+console: {prompt: "# $"}       # shell prompt after boot (console command completion)

@@ -1,0 +1,117 @@
+# Example board profile (header pin map). Copy and edit for a real board.
+id: example-40pin
+name: Example SBC (40-pin header)
+description: 'Example SBC (40-pin header): a made-up host controller board. Pins name
+  Linux GPIO numbers.'
+headers:
+- id: J40
+  title: 40-pin expansion header
+  layout: dual-row
+  pin_count: 40
+  pins:
+    1:
+      kind: power
+      label: 3.3V
+    2:
+      kind: power
+      label: 5V
+    3:
+      gpio: 83
+    4:
+      kind: power
+      label: 5V
+    5:
+      gpio: 82
+    6:
+      kind: gnd
+      label: GND
+    7:
+      gpio: 124
+    8:
+      gpio: 121
+    9:
+      kind: gnd
+      label: GND
+    10:
+      gpio: 120
+    11:
+      gpio: 118
+      alt: R.GPIO[35]
+    12:
+      gpio: 111
+      alt: R.PWM8
+    13:
+      gpio: 62
+    14:
+      kind: gnd
+      label: GND
+    15:
+      gpio: 126
+    16:
+      gpio: 71
+    17:
+      kind: power
+      label: 3.3V
+    18:
+      gpio: 63
+      alt: R.GPIO[18]
+    19:
+      gpio: 104
+    20:
+      kind: gnd
+      label: GND
+    21:
+      gpio: 105
+      alt: R.I2C1 SCL
+    22:
+      gpio: 61
+    23:
+      gpio: 106
+      alt: R.I2C1 SDA
+    24:
+      gpio: 107
+    25:
+      kind: gnd
+      label: GND
+    26:
+      gpio: 70
+    27:
+      gpio: 1
+    28:
+      gpio: 0
+    29:
+      gpio: 122
+      alt: R.UART0 TXD
+    30:
+      kind: gnd
+      label: GND
+    31:
+      gpio: 125
+    32:
+      gpio: 123
+      alt: R.UART0 RXD
+    33:
+      gpio: 127
+    34:
+      kind: gnd
+      label: GND
+    35:
+      gpio: 112
+      alt: R.PWM9
+    36:
+      gpio: 119
+    37:
+      gpio: 60
+    38:
+      gpio: 114
+      alt: R.GPIO[31]
+    39:
+      kind: gnd
+      label: GND
+    40:
+      gpio: 113
+      alt: R.GPIO[30]
+gpio:
+  numbering: global
+pinctrl:
+  debugfs: /sys/kernel/debug/pinctrl/example-pinctrl

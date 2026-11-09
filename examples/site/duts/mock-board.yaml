@@ -1,0 +1,15 @@
+# Board on the local development host (dev-mock). Its reset line is the mock GPIO
+# P15; there is no serial console or fastboot device, so it can be listed, leased and
+# reset, but not booted.
+id: mock-board
+host: dev-mock
+board: board-x
+soc: soc-b
+description: demo board on the mock host (no console, no USB)
+console: {alias: mock-board}
+fastboot: {usb: "usb:0-0"}
+control:
+  backend: gpio-relay
+  reset: {pin: P15, mode: button, pulse_ms: 200}
+  fdl: {strategy: strapped}
+sdks: []

@@ -1,0 +1,21 @@
+# SoC profile (made-up): everything bsp knows about a SoC.
+soc: soc-a
+fingerprint: ["ROMA: boot start", "ROMA: usb init", "ROMA: setup="]     # boot-ROM console lines after a reset; probe picks the best match
+download_mode:                 # what download (FDL) mode looks like
+  console: "download handler"
+  fastboot: "DFU download"
+usb_vids: ["1d6b"]             # USB vendor ids of its download / fastboot gadgets
+images:                        # known-good probe images (RAM only), next to this file
+  fsbl: {file: fsbl.bin}
+  uboot: {file: uboot.itb}
+identify:                      # hooks/probe/identify: stage images, wait, extract fields
+  sequence:
+    - {stage: fsbl, console: "SPL", fastboot: "Fastboot"}
+    - {stage: uboot, console: "U-Boot 20", fastboot: "Fastboot"}
+  fields:
+    product: "board_name = (.*?)\\s*$"
+    serial: "serial# = (.*?)\\s*$"
+    model: "Model:\\s*(.+?)\\s*$"
+    mem_gib: "DRAM:\\s*(\\d+) GiB"
+  placeholders: {serial: ["0", none]}
+  name: [product, mem, serial]

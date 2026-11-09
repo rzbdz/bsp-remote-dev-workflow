@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+"""probe/consoles: list serial console candidates on this host.
+
+request : {"serial_mux_run": "~/.serial-mux/run", "patterns": ["ttyUSB*", "ttyACM*"]}
+result  : {"consoles": [{"id", "kind": "serial-mux"|"tty", "alias"?, "device", "usb_port"?, "log"?, "busy"}]}
+serial-mux aliases are listed with their log dir; raw ttys not owned by serial-mux are listed as kind=tty.
+"""
+import glob
+import json
+import os
+import sys
+from pathlib import Path
+
+
+def usb_port(dev):
+    try:
+        p = Path(f"/sys/class/tty/{Path(dev).resolve().name}/device").resolve()
+    except OSError:
+        return None
+    for a in [p, *p.parents]:
+        if (a / "busnum").exists():
+            return a.name
+    return None
+
+
+def main():
+    req = json.loads(sys.stdin.read() or "{}")
+    run = Path(os.path.expanduser(req.get("serial_mux_run", "~/.serial-mux/run")))
+    logs = run.parent / "logs"
+    out, owned = [], set()
+    for f in sorted(run.glob("*.json")):
+        try:
+            info = json.loads(f.read_text())
+        except ValueError:
+            continue
+        alias = info.get("alias") or f.stem
+        dev = info.get("device")
+        if dev:
+            owned.add(os.path.realpath(dev))
+        out.append({"id": alias, "kind": "serial-mux", "alias": alias, "device": dev,
+                    "usb_port": info.get("usb_port"), "log": str(logs / alias),
+                    "busy": bool(info.get("pid")), "state": info.get("serial_state")})
+    for pat in req.get("patterns", ["ttyUSB*", "ttyACM*"]):
+        for dev in sorted(glob.glob(f"/dev/{pat}")):
+            if os.path.realpath(dev) in owned:
+                continue
+            out.append({"id": Path(dev).name, "kind": "tty", "device": dev, "usb_port": usb_port(dev), "busy": False})
+    print(f"{len(out)} console candidate(s)")
+    print(json.dumps({"consoles": out}))
+    return 0 if out else 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,8 @@
+# Hardware support pack: public knowledge about SpacemiT parts. Anyone who buys these
+# boards sees the same boot ROM, bootloader output and header pin maps.
+name: spacemit
+description: SpacemiT K1 / K3 SoC profiles, board header pin maps, flash-package hook
+provides:
+  socs: [k1, k3]               # boot-ROM fingerprints, download mode, USB ids, U-Boot identity output
+  boards: [spacemit-k3-com260, spacemit-k1x-deb1]
+  hooks: [flash/spacemit-pkg]  # flash a pack_image zip (partition_*.json layouts) over fastboot

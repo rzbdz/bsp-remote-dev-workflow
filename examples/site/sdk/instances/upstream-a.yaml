@@ -1,0 +1,21 @@
+id: upstream-a
+family: kernel-script
+workspace: kernel-tree         # shares the tree (and its lease) with upstream-b
+soc: soc-b
+board: board-x                 # {board} in the family's build target
+description: upstream kernel for soc-b boards
+boot:
+  load:
+    status: ready
+    steps:
+      - {do: enter-fdl}
+      - {do: stage, artifact: fsbl}
+      - {do: continue}
+      - {do: wait, fastboot: "Fastboot", timeout: 60}
+      - {do: stage, artifact: uboot-sbi}
+      - {do: continue}
+      - {do: wait, serial: "U-Boot 20", fastboot: "Fastboot", timeout: 60}
+      - {do: stage, artifact: kernel-fit}
+      - {do: continue}
+      - {do: wait, serial: "# $", fail: "Kernel panic", timeout: 120}
+  download: {status: todo, notes: "RAM boot only for now", steps: []}

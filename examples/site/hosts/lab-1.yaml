@@ -1,0 +1,29 @@
+# Board host config (one per host running bsp-hostd). Paths are relative to this file.
+host:
+  id: lab-1
+  description: example board host
+server:
+  bind: 0.0.0.0
+  port: 8765
+  state_dir: /var/lib/bsp      # probed DUTs, leases, runtime GPIO config, artifact cache
+  auth_token: null             # or env BSP_TOKEN: required for POST
+modules:
+  gpio_relay:                  # before dut: dut drives the reset/FDL lines through it
+    board: example-40pin       # boards/<id>.yaml
+    backend: sysfs             # sysfs | gpiod | mock
+    hw_timeout_s: 3.0
+    pinmux: true
+    protected: []              # pins that must never be driven
+    channels: {}
+    aliases: {}
+  sdk: {}                      # sdk catalog: ../sdk
+  dut:
+    smtty: smtty               # serial-mux client / daemon (third_party/serial-mux)
+    serial_mux: serial-mux
+    serial_log_dir: /root/.serial-mux/logs
+    fastboot: fastboot
+    probe:
+      watch_s: 3.0             # observation window after each candidate reset pulse
+      pulse_ms: 1000
+      default_soc: null        # used only when no SoC fingerprint matches
+      default_sdks: {}         # per SoC; empty = every SDK target of the detected SoC

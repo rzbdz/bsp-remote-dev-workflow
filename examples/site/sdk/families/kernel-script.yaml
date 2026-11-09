@@ -1,0 +1,13 @@
+# Build style: a kernel tree built by its own script; bootloaders staged next to the output.
+id: kernel-script
+description: tree-local build script; artifacts in a staging dir
+build:
+  runner: script               # target = shell command from the tree root; {key} = instance field
+  targets: {kernel: "./build.sh -b {board}"}
+  clean: {kernel: "make mrproper"}
+artifacts:
+  dir: staging
+  roles: {fsbl: FSBL.bin, uboot-sbi: u-boot-opensbi.itb, kernel-fit: Image.itb}
+dev_projects: ["."]
+env: {path_prepend: []}
+console: {prompt: "# $"}
