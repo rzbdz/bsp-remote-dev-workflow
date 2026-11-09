@@ -1,4 +1,7 @@
-"""Keep this host's copy of the registry's SDK catalog current.
+"""Keep this host's copy of the registry's SDK catalog, SoC profiles and hooks current.
+
+SDK documents go to <state>/catalog; the shared files (SoC profiles, hooks and the images they
+stage, see registry/files.py) to <state>/catalog-files, a layer above the host's own site.
 
 The registry answers every announcement with its catalog revision and nudges hosts right after
 a change. When the revision differs from the copy kept in <state>/catalog, the host fetches the
@@ -23,11 +26,18 @@ _OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 class CatalogFollower:
-    def __init__(self, registry_url: str, layer: Path, bus, site_roots: list[Path] | None = None):
-        self.url = registry_url.rstrip("/") + "/api/v1/catalog/snapshot"
+    def __init__(self, registry_url: str, layer: Path, bus, site_roots: list[Path] | None = None,
+                 token: str | None = None):
+        self.base = registry_url.rstrip("/")
+        self.url = self.base + "/api/v1/catalog/snapshot"
         self.layer, self.bus = Path(layer), bus
+        self.files_layer = self.layer.with_name(self.layer.name + "-files")
+        self.token = token
         self.site_roots = [Path(r) for r in (site_roots or [])]
         self.rev = layer_rev(self.layer)
+        from ..registry.files import layer_digest
+
+        self.files_digest = layer_digest(self.files_layer)
         self.last: dict[str, Any] = {}
         self.shadowed: list[dict[str, Any]] = self.find_shadowed()
         self._lock = threading.Lock()
@@ -77,17 +87,45 @@ class CatalogFollower:
                 materialize(snap, self.layer)
                 old, self.rev = self.rev, snap["rev"]
                 self.bus.publish("catalog.updated", rev=self.rev, previous=old, documents=len(snap["docs"]))
+            files = self.sync_files(reset)
             self.shadowed = self.find_shadowed()
             if self.shadowed:
                 log.warning("catalog: site edits overridden by the registry, not in effect: %s",
                             ", ".join(f"{x['ref']} ({x['file']})" for x in self.shadowed))
-            self.last = {"ok": True, "rev": self.rev, "changed": changed, "shadowed": self.shadowed}
+            self.last = {"ok": True, "rev": self.rev, "changed": changed, "shadowed": self.shadowed,
+                         "files_digest": self.files_digest, "files": files}
             return self.last
 
-    def check(self, remote_rev: Any) -> None:
+    def _get(self, path: str) -> bytes:
+        req = urllib.request.Request(self.base + path)
+        if self.token:
+            req.add_header("Authorization", f"Bearer {self.token}")
+        with _OPENER.open(req, timeout=60) as r:
+            return r.read()
+
+    def sync_files(self, reset: bool = False) -> dict[str, Any]:
+        """Fetch the registry's SoC profiles and hooks when they changed (a registry without them: nothing)."""
+        from ..registry.files import materialize as write_files
+
+        try:
+            manifest = json.loads(self._get("/api/v1/registry/files"))["result"]
+        except Exception as e:  # noqa: BLE001 - keep the files we have
+            log.warning("catalog files: cannot fetch from %s: %s (keeping %s)", self.base, e, self.files_digest[:12] or "none")
+            return {"ok": False, "error": str(e)}
+        if manifest["digest"] == self.files_digest and not reset:
+            return {"ok": True, "changed": False}
+        res = write_files(manifest, self.files_layer, lambda sha: self._get(f"/api/v1/registry/blobs/{sha}"),
+                          lambda line: log.info("%s", line))
+        old, self.files_digest = self.files_digest, manifest["digest"]
+        self.bus.publish("catalog.updated", rev=self.rev, files=manifest["digest"][:12], previous_files=old[:12])
+        if res["missing"]:
+            log.warning("catalog files: images the registry does not have: %s", res["missing"])
+        return {"ok": True, "changed": True, **res}
+
+    def check(self, remote_rev: Any, files_digest: Any = None) -> None:
         """The registry said its revision; fetch in the background when ours differs."""
         try:
-            if int(remote_rev) != self.rev:
+            if int(remote_rev) != self.rev or (files_digest and files_digest != self.files_digest):
                 threading.Thread(target=self.sync, name="catalog sync", daemon=True).start()
         except (TypeError, ValueError):
             pass

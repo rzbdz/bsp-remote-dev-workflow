@@ -52,6 +52,39 @@ def registry_layer() -> Path | None:
     return cache if cache.is_dir() else None
 
 
+def registry_files(sync: bool = True) -> Path | None:
+    """The registry's shared SoC profiles and hooks as a local layer (socs/, hooks/), fetched when they changed; the
+    last copy when the registry cannot be reached; None without a registry or without a copy."""
+    from ..registry.files import layer_digest, materialize as write_files
+
+    url = registry_url()
+    if not url:
+        return None
+    cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "bsp" / \
+        f"files-{hashlib.sha1(url.encode()).hexdigest()[:10]}"
+    if sync:
+        import json
+        import urllib.request
+
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        token = os.environ.get("BSP_REGISTRY_TOKEN") or os.environ.get("BSP_TOKEN")
+
+        def get(path: str) -> bytes:
+            req = urllib.request.Request(url.rstrip("/") + path)
+            if token:
+                req.add_header("Authorization", f"Bearer {token}")
+            with opener.open(req, timeout=60) as r:
+                return r.read()
+        try:
+            manifest = json.loads(get("/api/v1/registry/files"))["result"]
+            if manifest["digest"] != layer_digest(cache):
+                cache.parent.mkdir(parents=True, exist_ok=True)
+                write_files(manifest, cache, lambda sha: get(f"/api/v1/registry/blobs/{sha}"))
+        except Exception:  # noqa: BLE001 - offline, or a registry without shared files: keep what we have
+            pass
+    return cache if cache.is_dir() else None
+
+
 def _author(args) -> str:
     return args.author or os.environ.get("BSP_HOLDER") or os.environ.get("USER") or "anonymous"
 
@@ -104,6 +137,7 @@ def add_parser(sub) -> None:
     ex = cs.add_parser("export", help="write the registry's documents as site files (backup), with removed.json")
     ex.add_argument("--dir", required=True)
     cs.add_parser("status", help="the catalog revision, the revision each host has, and site edits it overrides")
+    cs.add_parser("sync", help="fetch the registry's catalog, SoC profiles and hooks to this machine now")
     cs.add_parser("refresh", help="clear this machine's cached catalog and have every host fetch it again now")
 
 
@@ -168,6 +202,16 @@ def run(args, store: RemoteStore, token: str | None) -> tuple[Any, str]:
             f"wrote catalog revision {snap['rev']} ({len(snap['docs'])} documents) to {dest}"
     if c == "status":
         return call("catalog_status")
+    if c == "sync":
+        from ..registry.files import layer_digest
+
+        sdk, files = registry_layer(), registry_files()
+        from ..registry.catalog import layer_rev
+
+        res = {"rev": layer_rev(sdk) if sdk else None, "sdk": str(sdk) if sdk else None,
+               "files": str(files) if files else None, "files_digest": layer_digest(files) if files else None}
+        return res, (f"catalog revision {res['rev']} in {sdk}" if sdk else "no SDK catalog from the registry") + "\n" + (
+            f"SoC profiles and hooks {res['files_digest'][:12]} in {files}" if files else "no shared files from the registry")
     if c == "refresh":
         import shutil
 

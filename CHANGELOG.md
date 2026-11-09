@@ -18,6 +18,8 @@ All notable changes to this project are documented here. The format follows
   slots; `--known` only tries reset lines slots had before. Hosts tell the registry about new
   boards and slots at once.
 
+- The registry shares its site's SoC profiles, hooks and their images: hosts that announce there
+  follow them as a layer above their site, and `bsp catalog sync` brings them to a client.
 - Media boot: a board whose FDL strap is held down can boot its own media when its SoC profile (or
   the DUT) declares `media_boot` steps, run from download mode. A plain reset
   (`bsp dut reset --no-fdl`) and recipe steps marked `when: fdl-not-strapped` use them; `bsp dut

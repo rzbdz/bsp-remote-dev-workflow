@@ -62,6 +62,12 @@ class RegistryModule(Module):
         # The SDK catalog, seeded by the site this registry runs with (<site>/hosts/<registry>.yaml -> <site>).
         site = (ctx.config_dir / config.get("site", "..")).resolve()
         self.catalog = CatalogStore(ctx.module_state_dir("registry") / "catalog.sqlite", layered("sdk", site))
+        # SoC profiles, hooks and their images, shared from the same site (see files.py)
+        from .files import SharedFiles
+
+        self.files = SharedFiles(site)
+        # the token hosts announce with (server.auth_token / BSP_TOKEN): it guards the shared files too
+        self.token = ctx.auth_token
         # git-registry: the site directory is a clone of the catalog repository, kept in step with the catalog
         self.git = None
         if config.get("git"):
@@ -106,6 +112,7 @@ class RegistryModule(Module):
                      "duts": [str(d) for d in (body.get("duts") or [])][:200],
                      "slots": [str(d) for d in (body.get("slots") or [])][:200],
                      "catalog_rev": int(body.get("catalog_rev") or 0),
+                     "files_digest": str(body.get("files_digest") or "")[:64],
                      "catalog_shadowed": [x for x in (body.get("catalog_shadowed") or []) if isinstance(x, dict)][:100],
                      "ports": {k: [str(x) for x in v][:500] for k, v in (body.get("ports") or {}).items()
                                if k in ("tty", "usb") and isinstance(v, list)},
@@ -123,7 +130,8 @@ class RegistryModule(Module):
             if any(added.values()) or any(removed.values()):
                 self.ctx.bus.publish("registry.ports", host=host, added=added, removed=removed)
         return {"host": host, "registered": True, "seen_address": seen, "addresses": addrs,
-                "refresh_s": max(10, int(self.stale_s / 4)), "catalog_rev": self.catalog.rev}
+                "refresh_s": max(10, int(self.stale_s / 4)), "catalog_rev": self.catalog.rev,
+                "files_digest": self.files.digest()}
 
     # -------------------------------------------------------------- reads --
     def view(self, e: dict[str, Any]) -> dict[str, Any]:
@@ -188,9 +196,11 @@ class RegistryModule(Module):
             self.git.stop()
 
     def catalog_status(self) -> dict[str, Any]:
-        rev = self.catalog.rev
-        return {"rev": rev, "git": self.git.status() if self.git else None, "hosts": [{"host": e["host"], "catalog_rev": e.get("catalog_rev", 0),
-                                       "current": e.get("catalog_rev", 0) == rev, "stale": e["stale"], "age_s": e["age_s"],
+        rev, files = self.catalog.rev, self.files.digest()
+        return {"rev": rev, "files_digest": files, "git": self.git.status() if self.git else None,
+                "hosts": [{"host": e["host"], "catalog_rev": e.get("catalog_rev", 0),
+                                       "current": e.get("catalog_rev", 0) == rev and e.get("files_digest", "") == files,
+                                       "files_current": e.get("files_digest", "") == files, "stale": e["stale"], "age_s": e["age_s"],
                                        "shadowed": e.get("catalog_shadowed") or [],
                                        "duts": e["duts"], "ports": e.get("ports") or {}} for e in self.list(all=True)]}
 
@@ -272,13 +282,13 @@ class RegistryModule(Module):
             Command(CommandSpec("catalog.status", "The catalog revision, which revision each host has, and site edits it overrides",
                                 [], mutating=False),
                     self.catalog_status,
-                    lambda r: f"catalog revision {r['rev']}" + (
+                    lambda r: f"catalog revision {r['rev']}, files {(r.get('files_digest') or '')[:12]}" + (
                         f"  (git {r['git']['remote']} {r['git']['branch']} at {r['git']['head']}, pushed {r['git']['pushed']}"
                         + (f", {r['git']['pending']} pending" if r['git']['pending'] else "")
                         + (f"; ERROR {r['git']['last_error']}" if r['git']['last_error'] else "") + ")"
                         + "".join(f"\n  NOT APPLIED from git: {x['ref']} ({x['author']}, {x['commit']}): {x['error']}" for x in r['git']['rejected'][-5:])
                         if r.get("git") else "") + "\n" + "\n".join(
-                        f"  {h['host']:<16} rev {h['catalog_rev']:<5} {'ok' if h['current'] else 'BEHIND'}{' (stale)' if h['stale'] else ''}"
+                        f"  {h['host']:<16} rev {h['catalog_rev']:<5} {'ok' if h['current'] else 'BEHIND'}{'' if h.get('files_current', True) else ' (files behind)'}{' (stale)' if h['stale'] else ''}"
                         + "".join(f"\n    NOT IN EFFECT: {x['file']} differs from {x['ref']} (publish with put)" for x in h["shadowed"])
                         for h in r["hosts"])),
             Command(CommandSpec("catalog.git_pull", "Take commits pushed to the catalog's git repository in now (validated)", []),

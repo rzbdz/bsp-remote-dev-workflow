@@ -58,7 +58,7 @@ class Hub:
         self.started = time.time()
         config.state_dir.mkdir(parents=True, exist_ok=True)
         ctx = ModuleContext(config.host_id, self.bus, config.state_dir, config.config_dir, jobs=self.jobs,
-                            port=config.port)
+                            port=config.port, auth_token=config.auth_token)
         self.ctx = ctx
         self.modules: dict[str, Module] = {
             name: MODULES.get(name)(ctx, mcfg) for name, mcfg in config.modules.items() if mcfg.get("enabled", True)
@@ -71,8 +71,11 @@ class Hub:
             from ..core.site import layered
 
             site = (config.config_dir / "..").resolve()
+            import os
+
             self.follower = CatalogFollower(config.announce["url"], config.state_dir / "catalog", self.bus,
-                                            layered("sdk", site))
+                                            layered("sdk", site),
+                                            config.announce.get("token") or os.environ.get("BSP_REGISTRY_TOKEN"))
         if self.follower:
             ctx.services["catalog_follower"] = self.follower
         self.registry = CommandRegistry()
@@ -90,6 +93,7 @@ class Hub:
                 "slots": [f"{s['id']}:{'on' if s['online'] else 'off'}:{s.get('dut') or ''}" for s in dut.slot_list()]
                 if dut and hasattr(dut, "slot_list") else [],
                 "ports": dut.ports() if dut else {}, "catalog_rev": self.follower.rev if self.follower else 0,
+                "files_digest": self.follower.files_digest if self.follower else "",
                 "catalog_shadowed": self.follower.shadowed if self.follower else []}
 
     def status(self) -> dict[str, Any]:
@@ -180,7 +184,7 @@ def create_app(config: HostConfig) -> FastAPI:
             announcer = Announcer(config.announce, hub.announcement)
             hub.announcer = announcer
             if hub.follower:
-                announcer.on_reply = lambda result: hub.follower.check(result.get("catalog_rev"))
+                announcer.on_reply = lambda result: hub.follower.check(result.get("catalog_rev"), result.get("files_digest"))
                 # tell the registry at once which catalog revision this host now has
                 hub.bus.on("catalog.updated", lambda ev: announcer.poke())
                 await run_in_threadpool(hub.follower.sync)

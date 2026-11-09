@@ -35,7 +35,7 @@ gpiod = ["gpiod>=2.1"]
 dev = ["pytest>=7", "httpx>=0.27"]
 
 [project.scripts]
-bsp = "bsp.cli.main:main"
+bsp = "bsp.cli.main:cli"
 bsp-hostd = "bsp.server.__main__:main"
 
 [tool.setuptools.packages.find]

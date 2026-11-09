@@ -172,11 +172,16 @@ def _fail(g, err: dict[str, Any], code: int) -> int:
     return code
 
 
-def main(argv: list[str] | None = None) -> int:
+def cli() -> int:
+    """The `bsp` command: `bsp ... | head` ends quietly. (Not in main(), which tests and tools call in-process.)"""
     import signal
 
     if hasattr(signal, "SIGPIPE"):
-        signal.signal(signal.SIGPIPE, signal.SIG_DFL)   # `bsp ... | head` ends quietly
+        signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+    return main()
+
+
+def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     g, rest = _global_parser().parse_known_args(argv)
     stateless = g.stateless or os.environ.get("BSP_STATELESS", "").lower() in ("1", "true", "yes")
@@ -303,7 +308,10 @@ def _images(args) -> tuple[Any, str]:
     site = site_dir()
     if site is None:
         raise RemoteError("no site directory", code="invalid_request", hint="set BSP_SITE or create ~/.config/bsp/site")
-    profiles = SocProfiles(layered("socs", site))
+    from .catalogcli import registry_files
+
+    shared = registry_files(sync=False)        # the registry's SoC profiles (`bsp catalog sync`), above the site
+    profiles = SocProfiles(layered("socs", site) + ([shared / "socs"] if shared and (shared / "socs").is_dir() else []))
     if args.images_cmd == "sync":
         lines: list[str] = []
         r = images.sync(profiles, site, (lambda line: print(line, file=sys.stderr)) if not args.json else lines.append)
@@ -376,4 +384,4 @@ def _watch(hosts: list[HostHandle], as_json: bool = False) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(cli())

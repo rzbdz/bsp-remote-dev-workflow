@@ -174,6 +174,7 @@ the registry once; `bsp catalog export --dir DIR` writes the registry's document
 | `bsp catalog history REF`, `bsp catalog rollback REF REV` | Every revision, and writing an earlier one again |
 | `bsp catalog status` | The catalog revision, which revision each host has, and site edits it overrides |
 | `bsp catalog refresh` | Clear this machine's cached catalog and have every host fetch it again now |
+| `bsp catalog sync` | Fetch the registry's catalog, SoC profiles and hooks to this machine now |
 
 `REF` is an SDK id, or `family/ID`, `server/ID`, `workspace/ID`.
 
@@ -226,3 +227,20 @@ modules:
   reason, and `bsp catalog status` lists it.
 - The registry needs push access (its ssh key on the repository). `bsp catalog status` shows the
   repository, the head, what was last pushed, writes still pending and the last error.
+
+### SoC profiles and hooks
+
+Besides SDK documents, the registry shares its site's `socs/` (SoC profiles, with their
+`media_boot` steps and images) and `hooks/` (hook scripts). Every host that announces itself
+there, and every client after `bsp catalog sync`, gets them as a layer above its own site. Each
+board and each compile machine then works from the same profiles and scripts.
+
+- Change them in the registry's site, which is usually the git-registry clone. A push is taken in
+  at the next pull. Hosts fetch them when the files' digest changes, and the registry's answer to
+  every announcement carries that digest.
+- Images a profile stages by `sha256` go along: the registry serves them from its `.blobs/`, so
+  run `bsp images sync` there. Hosts keep a file only if it hashes right.
+- Hooks are code that hosts run, so these files are served only to holders of the registry's
+  token (`BSP_REGISTRY_TOKEN` on hosts) when it has one. They come only from the registry's site,
+  never from the open catalog API.
+- `bsp catalog status` shows which hosts have the current files.

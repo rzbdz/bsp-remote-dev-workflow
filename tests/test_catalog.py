@@ -242,3 +242,75 @@ def test_git_registry_commits_writes_and_takes_in_pushed_commits(tmp_path):
     assert "no-such-family" not in (site / "sdk" / "instances" / "upstream-a.yaml").read_text()
     assert "does not validate" in git(remote, "log", "-1", "--format=%s", "main")
     assert git(site, "rev-parse", "HEAD") == git(remote, "rev-parse", "main")
+
+
+def test_hosts_and_clis_share_the_registrys_soc_profiles_hooks_and_images(tmp_path, monkeypatch):
+    """SoC profiles, hooks and the images they stage go from the registry's site to every host and CLI."""
+    import hashlib
+    import threading
+
+    import uvicorn
+
+    from bsp.registry.files import SharedFiles, layer_digest
+
+    image = b"\x00handoff image\n"
+    sha = hashlib.sha256(image).hexdigest()
+    reg_site = tmp_path / "reg"
+    (reg_site / "socs" / "soc-a").mkdir(parents=True)
+    (reg_site / "socs" / "soc-a" / "soc.yaml").write_text(
+        "soc: soc-a\nimages:\n  handoff: {file: handoff.bin, sha256: %s}\n"
+        "media_boot:\n  name: shared-handoff\n  steps:\n    - {do: stage, image: handoff}\n    - {do: continue}\n" % sha)
+    (reg_site / ".blobs" / sha).mkdir(parents=True)
+    (reg_site / ".blobs" / sha / "handoff.bin").write_bytes(image)        # fetched there by `bsp images sync`
+    hook = reg_site / "hooks" / "boot" / "say"
+    hook.parent.mkdir(parents=True)
+    hook.write_text("#!/bin/sh\necho '{\"said\": true}'\n")
+    hook.chmod(0o755)
+    (reg_site / "socs" / "soc-a" / "probe.bin").write_bytes(b"not shared: no sha256 in the profile")
+    shared = SharedFiles(reg_site)
+    assert sorted(f["path"] for f in shared.manifest()["files"]) == ["hooks/boot/say", "socs/soc-a/soc.yaml"]
+    monkeypatch.setenv("BSP_TOKEN", "reg-secret")
+    monkeypatch.setenv("BSP_REGISTRY_TOKEN", "reg-secret")
+
+    reg_app = _app(tmp_path, "r", "host: {id: r}\nserver: {state_dir: state}\nmodules: {registry: {site: ../../reg}}\n")
+    import socket
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(reg_app, host="127.0.0.1", port=port, log_level="error"))
+    threading.Thread(target=server.run, daemon=True).start()
+    while not server.started:
+        time.sleep(0.05)
+    try:
+        url = f"http://127.0.0.1:{port}"
+        with TestClient(reg_app) as reg:                       # hooks are code: only token holders get them
+            assert reg.get("/api/v1/registry/files").status_code == 403
+            assert reg.get(f"/api/v1/registry/blobs/{sha}").status_code == 403
+            assert reg.get("/api/v1/registry/files", headers={"Authorization": "Bearer reg-secret"}).status_code == 200
+        monkeypatch.delenv("BSP_TOKEN")
+        host_app = _app(tmp_path, "h2", f"host: {{id: h2}}\nserver: {{state_dir: state, announce: {{url: '{url}', interval_s: 3600}}}}\n"
+                                        "modules: {gpio_relay: {board: example-40pin, backend: mock, pinmux: false}, sdk: {}, dut: {}}\n")
+        with TestClient(host_app) as host:
+            st = host.get("/api/v1/status").json()["result"]
+            assert st["catalog"]["files_digest"] == shared.digest()
+            dut = [m for m in host_app.state.hub.modules.values() if m.name == "dut"][0]
+            prof = dut.socs.get("soc-a")
+            assert prof["media_boot"]["name"] == "shared-handoff"                      # the registry's profile wins
+            assert prof["images"]["handoff"]["path"].endswith(f"{sha}/handoff.bin")     # with its image, by hash
+            assert "say" in dut.hooks.names("boot")
+            # a change in the registry's site reaches the host at its next sync
+            hook.write_text("#!/bin/sh\necho '{\"said\": \"again\"}'\n")
+            res = host.post("/api/v1/tools/catalog_sync", json={}).json()["result"]   # (or the announcer got there first)
+            assert res["files"]["ok"] and res["files_digest"] == shared.digest()
+            assert dut.hooks.run("boot", "say", {}).data == {"said": "again"}
+        # a compile machine's CLI gets the same files with `bsp catalog sync`
+        monkeypatch.setenv("BSP_REGISTRY", url)
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+        from bsp.cli.catalogcli import registry_files
+
+        layer = registry_files()
+        assert layer and layer_digest(layer) == shared.digest()
+        assert (layer / "socs" / "soc-a" / "soc.yaml").exists() and (layer / ".blobs" / sha / "handoff.bin").read_bytes() == image
+    finally:
+        server.should_exit = True

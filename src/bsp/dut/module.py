@@ -70,17 +70,17 @@ class DutModule(Module):
         # The site's catalog, under the registry's copy when this host follows one (see server/catalog_follow.py).
         self._sdk_roots = layered("sdk", site)
         self._catalog_layer = ctx.state_dir / "catalog"
+        # SoC profiles and hooks: packs, the site, then the registry's shared files above them (catalog_follow.py)
+        self._site = site
+        self._files_layer = ctx.state_dir / "catalog-files"
         self.sdks = self._load_catalog()
         ctx.bus.on("catalog.updated", lambda ev: self.reload_catalog())
-        from .socs import SocProfiles
-
-        self.socs = SocProfiles(layered("socs", site))
+        self._hook_dirs = tuple(str((base / d).resolve()) for d in config.get("hook_dirs", []))
+        self._load_socs()
         self.registry = DutRegistry(ctx.host_id, site / "duts",
                                     state / "duts.json")
         self.leases = LeaseManager(state / "leases.json")
         self.store = ArtifactStore(state / "artifacts")
-        self.hooks = HookRunner(tuple(str((base / d).resolve()) for d in config.get("hook_dirs", []))
-                                + tuple(str(d) for d in reversed(layered("hooks", site))))
         from .consoles import ConsoleManager
 
         self.consoles = ConsoleManager(self.serial_mux, self.serial_log_dir)
@@ -116,6 +116,15 @@ class DutModule(Module):
             self.logins.last = {"error": str(e)}
             log.warning("console logins: %s", e)
 
+    def _load_socs(self) -> None:
+        from ..core.site import layered
+        from .socs import SocProfiles
+
+        files = [self._files_layer / k for k in ("socs", "hooks")]
+        self.socs = SocProfiles(layered("socs", self._site) + ([files[0]] if files[0].is_dir() else []))
+        hooks = layered("hooks", self._site) + ([files[1]] if files[1].is_dir() else [])
+        self.hooks = HookRunner(self._hook_dirs + tuple(str(d) for d in reversed(hooks)))
+
     def _load_catalog(self) -> SdkCatalog:
         return SdkCatalog(self._sdk_roots + ([self._catalog_layer] if self._catalog_layer.is_dir() else []))
 
@@ -123,7 +132,8 @@ class DutModule(Module):
         """Take the registry's new catalog; a catalog that does not load leaves the old one in place."""
         try:
             self.sdks = self._load_catalog()
-            self._event("catalog", sdks=len(self.sdks.instances.names()))
+            self._load_socs()
+            self._event("catalog", sdks=len(self.sdks.instances.names()), socs=sorted(self.socs.profiles))
         except BspError as e:
             self._event("error", error=e.to_dict(), what="catalog reload")
             log.warning("catalog reload failed, keeping the previous one: %s", e.message)

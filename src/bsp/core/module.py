@@ -22,6 +22,7 @@ class ModuleContext:
     config_dir: Path     # directory of the host config file (resolve relative paths against it)
     jobs: JobManager | None = None
     port: int = 8765     # where this host's API listens (for helpers that call back)
+    auth_token: str | None = None   # the token this host's API asks of writers (server.auth_token)
     # in-process service registry: modules publish objects others may use
     # (e.g. gpio_relay publishes its service; the dut module drives it)
     services: dict[str, Any] = field(default_factory=dict)
