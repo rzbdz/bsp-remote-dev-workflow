@@ -181,12 +181,15 @@ def build_commands(mod: "DutModule") -> list[Command]:
         cmd("slot.forget", "Forget a slot whose adapter is gone (stops its console daemon)",
             mod.slot_forget, [SLOT]),
         cmd("dut.rebuild", "After re-cabling the host: forget its probed DUTs and slots, then rediscover every board "
-                           "(reset lines used before first, old names kept)",
+                           "(reset lines used before first, old names kept); keep_used only redoes what moved",
             mod.rebuild,
             [Param("identify", "boolean", "boot U-Boot to read each board's identity", required=False, default=True),
              Param("sdks", help="comma list of sdks the found boards run (default by soc)", required=False),
-             Param("dry_run", "boolean", "only say what would be forgotten", required=False, default=False)],
-            render=lambda r: (f"rebuild job {r['job']} on {r['host']}: " if "job" in r else f"{r['host']} would ")
+             Param("dry_run", "boolean", "only say what would be forgotten", required=False, default=False),
+             Param("keep_used", "boolean", "keep leased or busy DUTs and slots whose adapter is still here; forget "
+                   "the DUTs whose console is gone and probe only free consoles", required=False, default=False)],
+            render=lambda r: (f"{'rediscover' if r.get('mode') == 'keep-used' else 'rebuild'} job {r['job']} on {r['host']}: "
+                              if "job" in r else f"{r['host']} would ")
             + f"forget {', '.join(r['forget_duts']) or 'no DUTs'}"
             + (f", keep {', '.join(r['keep_duts'])} (site catalog)" if r["keep_duts"] else "")),
     ]

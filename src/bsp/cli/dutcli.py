@@ -496,16 +496,23 @@ def rebuild(fleet: Fleet, args) -> tuple[Any, str]:
     if len(hosts) != 1:
         raise InvalidRequest("a rebuild starts one host over at a time", hint=f"pick it with -r ({', '.join(h.id for h in hosts)})")
     h = hosts[0]
-    params = {"identify": not args.no_identify, "sdks": args.sdks, "dry_run": args.dry_run or not args.yes}
+    keep = bool(getattr(args, "keep_used", False))
+    params = {"identify": not args.no_identify, "sdks": args.sdks, "dry_run": args.dry_run or not args.yes, "keep_used": keep}
     r = _ok(h, h.call("dut_rebuild", params))
     if "job" not in r:
+        if keep:
+            return r, (f"{h.id}: rediscovering would keep {', '.join(r.get('in_use') or []) or 'no boards in use'}, forget "
+                       f"{', '.join(r['forget_duts']) or 'no DUTs'} (console gone), then probe the free consoles. "
+                       f"Run again with --yes to do it.")
         return r, (f"{h.id}: a rebuild would forget {', '.join(r['forget_duts']) or 'no DUTs'} and every slot, then "
                    f"rediscover the boards. Run again with --yes to do it.")
     out = sys.stderr if args.json else sys.stdout
-    print(f"[{h.id}] rebuilding (job {r['job']}) ...", file=out, flush=True)
+    print(f"[{h.id}] {'rediscovering' if keep else 'rebuilding'} (job {r['job']}) ...", file=out, flush=True)
     v, _ = follow_job(h, r["job"], _Prefixed(out, f"[{h.id}]"), 1800)
     res = v["result"]
     lines = [f"[{h.id}] forgot {', '.join(res.get('forgot') or []) or 'no DUTs'}"]
+    if res.get("kept"):
+        lines.append(f"[{h.id}] kept in use: {', '.join(res['kept'])}")
     lines += [f"[{h.id}] registered {e['dut']}" + (f" in slot {h.id}/{e['slot']}" if e.get("slot") else "")
               for e in res.get("registered", [])]
     lines += [f"[{h.id}] {reason}" for reason in res.get("reasons", [])]
@@ -577,6 +584,9 @@ def add_parsers(sub) -> None:
     p.add_argument("--rebuild", action="store_true",
                    help="after re-cabling a host: forget its probed DUTs and slots and rediscover every board "
                         "(reset lines used before first, old names kept); needs -r and --yes")
+    p.add_argument("--keep-used", action="store_true",
+                   help="--rebuild: only redo what moved: keep leased or busy boards, forget boards whose console is "
+                        "gone, probe only free consoles (runs while others hold boards)")
     p.add_argument("--rounds", type=int, default=8, help="--human: at most this many boards (default 8)")
     p.add_argument("--wait", type=float, default=120, help="--human: seconds to wait for each board (default 120)")
 

@@ -617,32 +617,57 @@ class DutModule(Module):
         job = self.ctx.jobs.start("probe", f"{self.ctx.host_id}: probe", prober.run, host=self.ctx.host_id)
         return {"job": job.id, "host": self.ctx.host_id}
 
-    def rebuild(self, identify: bool = True, sdks: str | None = None, dry_run: bool = False) -> dict[str, Any]:
-        """Start the host's wiring over after it was re-cabled: forget every probed DUT and every slot, give each
-        adapter plugged in now a fresh slot and console, then probe them all (reset lines boards used before
-        first, the boards' old names kept when identify reads the same board) and register each board as found.
-        DUTs from the site's catalog stay. Nothing starts while a DUT is leased or busy."""
-        held = sorted(d for d in self.boards if self.leases.view(d) or self._busy.get(d))
-        if held:
+    def rebuild(self, identify: bool = True, sdks: str | None = None, dry_run: bool = False,
+                keep_used: bool = False) -> dict[str, Any]:
+        """Start the host's wiring over after it was re-cabled, then rediscover its boards.
+
+        The whole host (default): forget every probed DUT and every slot, give each adapter plugged in now a fresh
+        slot and console, then probe them all (reset lines boards used before first, the boards' old names kept
+        when identify reads the same board) and register each board as found. Nothing starts while a DUT is leased
+        or busy.
+
+        `keep_used`: only what moved. DUTs that are leased or busy keep their slots and wiring untouched; a DUT
+        whose console is gone (its adapter unplugged or moved) is forgotten with its slot; every adapter plugged in
+        now gets a slot; then the free consoles are probed on reset lines no kept DUT uses, so boards in use are
+        never reset. It runs while others hold boards.
+
+        DUTs from the site's catalog stay either way."""
+        used = {d for d in self.boards if self.leases.view(d) or self._busy.get(d)}
+        if used and not keep_used:
+            held = sorted(used)
             raise Conflict(f"{', '.join(held)} {'is' if len(held) == 1 else 'are'} leased or busy",
-                           hint="a rebuild resets every board on the host: release them first")
+                           hint="a rebuild resets every board on the host: release them first, or rediscover "
+                                "with keep_used to keep the boards in use")
         probed = sorted(d for d in self.boards if self.registry.origin(d) == "probed")
-        static = {self.boards[d].spec.console_alias for d in self.boards if d not in probed}
-        plan = {"host": self.ctx.host_id, "forget_duts": probed, "keep_duts": sorted(set(self.boards) - set(probed)),
+        if keep_used:
+            forget = [d for d in probed if d not in used and self._slot_online(self.boards[d]) is False]
+        else:
+            forget = probed
+        keep_aliases = {self.boards[d].spec.console_alias for d in self.boards if d not in forget}
+        plan = {"host": self.ctx.host_id, "mode": "keep-used" if keep_used else "all", "forget_duts": forget,
+                "keep_duts": sorted(set(self.boards) - set(forget)), "in_use": sorted(used),
                 "slots": [s["id"] for s in self.slots.all()]}
         if dry_run:
             return plan
 
+        def keep_slot(slot: dict[str, Any]) -> bool:
+            if slot.get("alias") in keep_aliases:
+                return True
+            # Rediscovering keeps every slot whose adapter is still here; only the gone ones are dropped.
+            return keep_used and bool(self.slots.view(slot).get("online"))
+
         def body(log) -> dict[str, Any]:
             from .probe import Prober
 
-            for dut in probed:
+            for dut in forget:
                 s = self.registry.remove(dut)
                 self._drop_aliases(dut)
                 self.slots.note(s.console_alias, "removed", dut=s.id, board=s.board or None)
                 log(f"forgot {dut} (was on console {s.console_alias})")
+            if keep_used and used:
+                log(f"kept in use: {', '.join(sorted(used))}")
             self._rebuild()
-            dropped = self.slots.rebuild(lambda slot: slot.get("alias") in static)["dropped"]
+            dropped = self.slots.rebuild(keep_slot)["dropped"]
             for slot in dropped:
                 if slot.get("alias"):
                     self.consoles.stop(slot["alias"])
@@ -650,20 +675,23 @@ class DutModule(Module):
             change = self.refresh_slots()
             log(f"slots now: {', '.join(s['id'] + ('' if s['online'] else ' (offline)') for s in self.slots.all()) or 'none'}"
                 + (f"; consoles that did not start: {change.get('failed')}" if change.get("failed") else ""))
-            self._event("rebuilt", forgot=probed, slots=[s["id"] for s in self.slots.all()])
+            self._event("rebuilt", forgot=forget, kept=sorted(used), slots=[s["id"] for s in self.slots.all()])
+            # The prober skips the consoles, reset lines and download ports of registered DUTs, so the boards kept
+            # in use are never touched.
             prober = Prober(self, pins=None, consoles=None, identify=identify,
                             default_sdks=[s for s in (sdks or "").split(",") if s] or None, register=True)
             result = prober.run(log)
-            return {**result, "forgot": probed}
+            return {**result, "forgot": forget, "kept": sorted(used)}
 
-        for d in probed:
+        for d in forget:
             self._busy[d] = "rebuild"
         try:
-            job = self.ctx.jobs.start("probe", f"{self.ctx.host_id}: rebuild", body, host=self.ctx.host_id)
+            job = self.ctx.jobs.start("probe", f"{self.ctx.host_id}: {'rediscover' if keep_used else 'rebuild'}", body,
+                                      host=self.ctx.host_id)
         finally:
-            for d in probed:
+            for d in forget:
                 self._busy.pop(d, None)
-        return {"job": job.id, "host": self.ctx.host_id, **plan}
+        return {"job": job.id, **plan}
 
     def refresh(self, dut: str, lease: str | None, name: str | None = None, rename: bool = False,
                 board: str | None = None, soc: str | None = None) -> dict[str, Any]:

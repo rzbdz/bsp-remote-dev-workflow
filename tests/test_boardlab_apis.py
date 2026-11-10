@@ -281,3 +281,47 @@ def test_rebuild_forgets_probed_boards_and_slots_and_rediscovers_them(host, monk
     assert job["result"]["forgot"] == ["k3-a"] and "k3-a" not in mod.boards
     assert [(s["id"], s["alias"]) for s in mod.slots.all() if s["alias"] != "mock-slot"] == [("s1", "uart-b")]
     assert found == ["k3-a"]                       # the probe would give the board on P16 its old name
+
+
+def test_rediscover_keeps_boards_in_use_and_redoes_only_what_moved(host, monkeypatch):
+    """keep_used: a leased board keeps its slot and wiring; a free board whose console is gone is forgotten with its
+    slot; a new adapter gets a slot; the probe runs while the leased board is held."""
+    from bsp.dut import probe as probe_mod
+
+    mod = host.app.state.hub.modules["dut"]
+    consoles = [{"id": "uart-a", "kind": "serial-mux", "alias": "uart-a", "device": "/dev/ttyUSB0", "usb_port": "p-a", "busy": True},
+                {"id": "uart-b", "kind": "serial-mux", "alias": "uart-b", "device": "/dev/ttyUSB1", "usb_port": "p-b", "busy": True}]
+    monkeypatch.setattr(mod.slots, "_list", lambda: consoles)
+    monkeypatch.setattr(mod.consoles, "stop", lambda alias: None)
+
+    def spec(dut, alias, pin, usb):
+        return {"id": dut, "board": "k3_deb1", "soc": "soc-b", "console": {"alias": alias}, "fastboot": {"usb": usb},
+                "control": {"backend": "gpio-relay", "reset": {"pin": pin, "mode": "button", "pulse_ms": 50},
+                            "fdl": {"strategy": "strapped"}}}
+    _call(host, "dut_add", spec=json.dumps(spec("k3-used", "uart-a", "P16", "usb:0-5")))
+    _call(host, "dut_add", spec=json.dumps(spec("k3-moved", "uart-b", "P17", "usb:0-6")))
+    token = _call(host, "dut_acquire", dut="k3-used", holder="boardlab:user:alice", ttl=600)["token"]
+    # Re-cabled: k3-moved's adapter is gone, a new one appeared; k3-used's adapter stays where it was.
+    consoles[:] = [consoles[0], {"id": "uart-c", "kind": "serial-mux", "alias": "uart-c", "device": "/dev/ttyUSB2", "usb_port": "p-c", "busy": True}]
+    mod.refresh_slots()
+
+    plan = _call(host, "dut_rebuild", keep_used=True, dry_run=True)
+    assert plan["mode"] == "keep-used" and plan["forget_duts"] == ["k3-moved"] and plan["in_use"] == ["k3-used"]
+    seen = []
+
+    def fake_run(self, log):
+        gpio = self._gpio()
+        seen.append((self._used()["pins"], gpio.resolve("P16").key, gpio.resolve("P17").key))
+        return {"registered": [], "proposals": [], "reasons": []}
+
+    monkeypatch.setattr(probe_mod.Prober, "run", fake_run)
+    job = _call(host, "job_get", id=_call(host, "dut_rebuild", keep_used=True)["job"], wait=10)
+    assert job["status"] == "succeeded", job
+    assert job["result"]["forgot"] == ["k3-moved"] and job["result"]["kept"] == ["k3-used"]
+    assert "k3-used" in mod.boards and "k3-moved" not in mod.boards
+    assert _call(host, "dut_status", dut="k3-used")["lease"]["holder"] == "boardlab:user:alice"   # never touched
+    aliases = sorted(s["alias"] for s in mod.slots.all() if s["alias"] != "mock-slot")
+    assert aliases == ["uart-a", "uart-c"]                    # the gone slot dropped, the new adapter added
+    used_pins, in_use_line, freed_line = seen[0]
+    assert in_use_line in used_pins and freed_line not in used_pins   # the line in use is taken, the moved one free
+    _call(host, "dut_release", dut="k3-used", lease=token)
