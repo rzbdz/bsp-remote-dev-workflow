@@ -471,6 +471,16 @@ class DutModule(Module):
     def log(self, dut: str, lines: int, grep: str | None) -> dict[str, Any]:
         return {"dut": dut, "lines": self.board(dut).console.tail(lines, grep)}
 
+    def logs(self, dut: str, since: str | None = None, until: str | None = None, grep: str | None = None,
+             regex: bool = False, limit: int = 20000, first: bool = False) -> dict[str, Any]:
+        """The console's log over a time range, searched (see SerialConsole.range)."""
+        if regex and grep:
+            try:
+                re.compile(grep)
+            except re.error as e:
+                raise InvalidRequest(f"not a valid regex: {e}") from None
+        return {"dut": dut, **self.board(dut).console.range(since, until, grep, regex, max(1, min(int(limit), 200000)), first)}
+
     def add(self, spec: Any, replace: bool) -> dict[str, Any]:
         import json
 

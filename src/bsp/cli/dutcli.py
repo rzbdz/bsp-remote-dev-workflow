@@ -201,6 +201,10 @@ def dut_cmd(fleet: Fleet, args, book: LeaseBook) -> tuple[Any, str]:
     if c == "log":
         r = _ok(h, h.call("dut_log", {"dut": dut, "lines": args.lines, "grep": args.grep}))
         return r, "\n".join(r["lines"])
+    if c == "logs":
+        r = _ok(h, h.call("dut_logs", {"dut": dut, "since": args.since, "until": args.until, "grep": args.grep,
+                                        "regex": args.regex, "limit": args.limit, "first": args.first}, timeout=120))
+        return r, "\n".join(r["lines"]) + (f"\n({r['matched']} matched, showing {len(r['lines'])})" if r["truncated"] else "")
     if c == "remove":
         r = _ok(h, h.call("dut_remove", {"dut": dut, "force": args.force}))
         return r, f"removed {dut} from {h.id}"
@@ -593,6 +597,14 @@ def add_parsers(sub) -> None:
         if name == "log":
             x.add_argument("--lines", type=int, default=40)
             x.add_argument("--grep")
+    lg = ds.add_parser("logs", help="console log over a time range, searched (passive)")
+    lg.add_argument("dut")
+    lg.add_argument("--since", help="from this time, 'YYYY-MM-DD HH:MM:SS'")
+    lg.add_argument("--until", help="up to this time")
+    lg.add_argument("--grep", help="keep lines containing this text (case-blind)")
+    lg.add_argument("--regex", action="store_true", help="--grep is a regex")
+    lg.add_argument("--limit", type=int, default=20000)
+    lg.add_argument("--first", action="store_true", help="keep the first lines rather than the last when capped")
     pr = ds.add_parser("present", help="whether the DUT's download/fastboot port is on the USB bus")
     pr.add_argument("dut")
     rf = ds.add_parser("refresh", help="re-read the board in a slot after swapping it: reset into download "

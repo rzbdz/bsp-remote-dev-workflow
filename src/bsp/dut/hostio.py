@@ -72,6 +72,10 @@ class Fastboot:
         return m.group(1).strip() if m else out
 
 
+# serial-mux's log lines start with the time they were read
+_STAMP = re.compile(r"^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\]")
+
+
 # --------------------------------------------------------------- serial --
 class SerialConsole:
     """serial-mux alias: commands via `smtty --send/--wait`, passive reads from its
@@ -112,6 +116,41 @@ class SerialConsole:
             rx = re.compile(grep)
             out = [l for l in out if rx.search(l)]
         return out[-lines:]
+
+    def range(self, since: str | None, until: str | None, grep: str | None = None, regex: bool = False,
+              limit: int = 20000, first: bool = False) -> dict[str, Any]:
+        """Log lines stamped from `since` to `until` (`YYYY-MM-DD HH:MM:SS`, either may be None), across the day files.
+        A line without a stamp of its own goes with the one before it. `grep` keeps matching lines (case-blind text, or
+        a regex); at most `limit` lines are returned, the last ones (or the first, with `first`), and `truncated` says
+        when some were left out. `matched` counts every line that matched."""
+        lo, hi = (since or "")[:19], (until or "9999")[:19]
+        day_lo, day_hi = lo[:10] or "0000", hi[:10]
+        if grep and regex:
+            rx = re.compile(grep)
+            keep = lambda line: bool(rx.search(line))  # noqa: E731
+        elif grep:
+            needle = grep.casefold()
+            keep = lambda line: needle in line.casefold()  # noqa: E731
+        else:
+            keep = lambda line: True  # noqa: E731
+        out: list[str] = []
+        matched = 0
+        for p in sorted(self.log_dir.glob("*.log")):
+            if not (day_lo <= p.stem <= day_hi):
+                continue
+            inside = False
+            for line in p.read_bytes().decode("utf-8", errors="replace").splitlines():
+                stamp = _STAMP.match(line)
+                if stamp:
+                    inside = lo <= stamp.group(1) <= hi
+                if not inside or not keep(line):
+                    continue
+                matched += 1
+                if not first or len(out) < limit:
+                    out.append(line)
+                    if not first and len(out) > limit:
+                        del out[: len(out) - limit]
+        return {"lines": out, "matched": matched, "truncated": matched > len(out)}
 
     def nudge(self) -> None:
         """Press Enter on the console (best effort). The log is line-based, so a prompt

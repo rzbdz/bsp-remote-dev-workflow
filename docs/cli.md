@@ -25,6 +25,7 @@ How hosts are chosen without `-r`/`--url` is described in
 | `bsp dut list [--sdk SDK] [--soc SOC] [--free]` | Boards on all reachable hosts, with their slots |
 | `bsp dut status DUT` | Stage, lease, fastboot state, control lines, pending manual action, console tail |
 | `bsp dut log DUT [--lines N] [--grep RE]` | Recent console lines, read passively |
+| `bsp dut logs DUT [--since T] [--until T] [--grep TEXT [--regex]] [--limit N] [--first]` | The console log over a time range (`YYYY-MM-DD HH:MM:SS`), searched; says when it was capped |
 | `bsp dut acquire DUT [--holder NAME] [--purpose TEXT] [--ttl S]` | Lease a board (default 3600 s, at most 24 h); the token is remembered |
 | `bsp dut renew DUT [--ttl S]` | Extend your lease from now; holder, purpose and token stay the same |
 | `bsp dut release DUT [--force]` | Release it |

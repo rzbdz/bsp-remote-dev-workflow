@@ -18,6 +18,7 @@ All notable changes to this project are documented here. The format follows
   slots; `--known` only tries reset lines slots had before. Hosts tell the registry about new
   boards and slots at once.
 
+- `bsp dut logs`: a console's log over a time range, searched by text or regex, capped and saying so.
 - `bsp probe --rebuild -r HOST`: after re-cabling, forget the host's probed boards and slots and
   rediscover every board, trying the reset lines they used before first and keeping their names.
   A slot whose adapter is unplugged goes away unless a board is registered on it.
