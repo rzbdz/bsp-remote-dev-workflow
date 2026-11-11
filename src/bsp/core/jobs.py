@@ -27,13 +27,14 @@ class Job:
     result: Any = None
     error: dict[str, Any] | None = None
     meta: dict[str, Any] = field(default_factory=dict)
+    progress: int | None = None        # percent done, when the job's body reports it
 
     def view(self, since: int = 0) -> dict[str, Any]:
         return {
             "id": self.id, "kind": self.kind, "title": self.title, "status": self.status,
             "created": self.created, "finished": self.finished,
             "elapsed_s": round((self.finished or time.time()) - self.created, 1),
-            "lines": self.lines[since:], "next": len(self.lines),
+            "progress": self.progress, "lines": self.lines[since:], "next": len(self.lines),
             "result": self.result, "error": self.error, "meta": self.meta,
         }
 
@@ -48,6 +49,13 @@ class JobLog:
         line = f"[{time.time() - self._job.created:6.1f}s] {msg}"
         self._job.lines.append(line)
         self._bus.publish("job.log", job=self._job.id, line=line)
+
+    def progress(self, percent: float) -> None:
+        """Set how far the job is (0-100); `job get` and `job list` show it."""
+        pct = round(max(0.0, min(100.0, float(percent))))
+        if pct != self._job.progress:
+            self._job.progress = pct
+            self._bus.publish("job.progress", job=self._job.id, progress=pct)
 
 
 class JobManager:
@@ -72,6 +80,8 @@ class JobManager:
             try:
                 job.result = body(log)
                 job.status = "succeeded"
+                if job.progress is not None:
+                    job.progress = 100
             except BspError as e:
                 job.error, job.status = e.to_dict(), "failed"
                 log(f"FAILED: {e.message}" + (f" (hint: {e.hint})" if e.hint else ""))

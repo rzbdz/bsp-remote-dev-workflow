@@ -450,3 +450,36 @@ def test_a_board_whose_fdl_is_not_known_says_what_to_set():
     with pytest.raises(InvalidRequest) as e:
         ctl.enter_fdl(lambda line: None)
     assert "not set" in e.value.message and "--fdl strapped" in e.value.hint
+
+
+def test_hook_lines_stream_as_they_come_and_progress_lines_set_a_percent(tmp_path, monkeypatch):
+    """A long hook shows what it does while it runs; its progress lines set the job's percent."""
+    site = tmp_path / "site"
+    _hook(site, "flash", "slow", "import time\nprint('erasing', flush=True)\ntime.sleep(0.6)\n"
+                                 "print(json.dumps({'progress': 40}))\nprint(json.dumps({'type': 'progress', 'value': 40.4}))\n"
+                                 "print(json.dumps({'note': 'not progress'}))\n"
+                                 "print(json.dumps({'type': 'progress', 'value': 100, 'msg': 'rootfs'}))\n"
+                                 "print(json.dumps({'flashed': ['rootfs']}))")
+    monkeypatch.setenv("BSP_HOOKS_PATH", str(site))
+    seen, pcts = [], []
+    t0 = time.monotonic()
+    r = HookRunner().run("flash", "slow", {}, log=lambda l: seen.append((round(time.monotonic() - t0, 1), l)),
+                         progress=pcts.append)
+    assert r.data == {"flashed": ["rootfs"]}
+    assert seen[0][1] == "flash/slow: erasing" and seen[0][0] < 0.5          # before the hook is done
+    assert [l for _, l in seen[1:]] == ["flash/slow: 40%", 'flash/slow: {"note": "not progress"}',
+                                        "flash/slow: 100% rootfs"]
+    assert pcts == [40.0, 40.4, 100.0]
+
+
+def test_a_hook_that_runs_too_long_gets_sigterm_first(tmp_path, monkeypatch):
+    site = tmp_path / "site"
+    mark = tmp_path / "terminated"
+    _hook(site, "flash", "stuck", f"import signal,time\n"
+                                  f"signal.signal(signal.SIGTERM, lambda *a: (open({str(mark)!r}, 'w').write('x'), sys.exit(143)))\n"
+                                  f"print('working', flush=True)\ntime.sleep(30)")
+    monkeypatch.setenv("BSP_HOOKS_PATH", str(site))
+    with pytest.raises(HardwareTimeout) as e:
+        HookRunner().run("flash", "stuck", {}, timeout=1)
+    assert "timed out after 1s" in e.value.message and "more time" in e.value.hint
+    assert mark.exists() and e.value.details["stdout"] == ["working"]

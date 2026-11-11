@@ -151,7 +151,9 @@ class Hub:
                     _render_job),
             Command(CommandSpec("job.list", "Recent background jobs", [], mutating=False),
                     lambda: [{k: v for k, v in j.view().items() if k != "lines"} for j in self.jobs.list()],
-                    lambda js: "\n".join(f"{j['id']:<28} {j['status']:<10} {j['elapsed_s']:>7}s  {j['title']}" for j in js) or "(no jobs)"),
+                    lambda js: "\n".join(f"{j['id']:<28} {j['status']:<10} "
+                                         f"{str(j['progress']) + '%' if j.get('progress') is not None else '':>4} "
+                                         f"{j['elapsed_s']:>7}s  {j['title']}" for j in js) or "(no jobs)"),
             Command(CommandSpec("events.recent", "Recent events (status monitor history)",
                                 [Param("limit", "integer", "max events", required=False, default=30)], mutating=False),
                     lambda limit: [e.to_dict() for e in self.bus.recent(limit)], render_events),
@@ -159,7 +161,8 @@ class Hub:
 
 
 def _render_job(j: dict[str, Any]) -> str:
-    head = f"job {j['id']} [{j['status']}] {j['title']} ({j['elapsed_s']}s)"
+    pct = f" {j['progress']}%" if j.get("progress") is not None else ""
+    head = f"job {j['id']} [{j['status']}{pct}] {j['title']} ({j['elapsed_s']}s)"
     body = "\n".join(j["lines"])
     tail = ""
     if j.get("error"):

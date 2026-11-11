@@ -9,6 +9,12 @@ stdout  progress lines, then ONE JSON object on the last line (result)
 exit    0 ok | 2 not applicable / nothing found | other = failure ({"error","hint"} in result if possible)
 ```
 
+Progress lines reach the job log as the hook prints them (flush stdout, or run Python with `-u`). A line
+that is a JSON object with a percent, `{"progress": 42}` or `{"type": "progress", "value": 42}`
+(optionally with `"msg"`), sets the job's progress (`bsp job get`, `job list`) and shows as `42%` in
+its log. On timeout a hook and what it started get SIGTERM, then SIGKILL 10 s later: let go of any
+device on SIGTERM.
+
 Search order: `$BSP_HOOKS_PATH` → host config `hook_dirs` → `<site>/hooks` → `packs/*/hooks`
 (later packs first) → `~/.config/bsp/hooks` → this directory. Generic hooks live here; hooks for a
 public vendor tool or format go in a pack; private procedures go in the site.

@@ -194,7 +194,8 @@ class BootRunner:
                        "artifacts": {r: a["path"] for r, a in arts.items()},
                        "images": {k: v["path"] for k, v in images.items() if v.get("path")}}
                 res = self.hooks.run(step.get("kind", "flash"), step["name"], req,
-                                     timeout=float(step.get("timeout", 1800)), log=log)
+                                     timeout=float(step.get("timeout", 1800)), log=log,
+                                     progress=getattr(log, "progress", None))
                 brief = {k: v for k, v in res.data.items() if k != "flashed"}
                 brief["partitions"] = [":".join(str(x) for x in (f.get("layout"), f.get("partition")) if x)
                                        if isinstance(f, dict) else str(f) for f in res.data.get("flashed", [])]
