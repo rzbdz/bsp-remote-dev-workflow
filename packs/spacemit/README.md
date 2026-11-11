@@ -9,7 +9,7 @@ can observe. No SDK layouts, build servers or flash procedures of a particular i
 | `socs/k1/soc.yaml`, `socs/k3/soc.yaml` | boot-ROM fingerprint, download mode (console + fastboot product), USB vendor id, U-Boot identity patterns (TLV) and the probe sequence; image *names* only — known-good images go in `<site>/socs/<soc>/` |
 | `boards/spacemit-k3-com260.yaml` | 40-pin header map of the K3 Com260 host-controller board |
 | `boards/spacemit-k1x-deb1.yaml` | 26-pin header map of the K1-x deb1 board |
-| `hooks/flash/spacemit-pkg` | flash a `pack_image` zip (`partition_*.json` layouts) over fastboot |
+| `hooks/flash/spacemit-pkg` | flash a `pack_image` package (`partition_*.json` layouts) over fastboot: a zip from a recipe, or the directory `bsp dut flash` unpacks (a board still in the boot ROM is brought up with the package's `fastboot.yaml` stage/continue actions first) |
 | `hints/spacemit.md` | facts agents need on these boards |
 
 ## Hardware notes

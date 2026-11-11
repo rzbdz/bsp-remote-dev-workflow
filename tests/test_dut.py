@@ -437,6 +437,55 @@ esac
     assert "flash mtd" not in log.read_text() and "flash gpt" in log.read_text()
 
 
+def test_spacemit_pkg_flashes_a_package_directory_from_boot_rom_download_mode(tmp_path):
+    """`bsp dut flash` hands over an unpacked directory with the board in the boot ROM: the package's
+    fastboot.yaml stage/continue actions bring U-Boot up, then the layouts are flashed with progress."""
+    import subprocess
+    import sys
+
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "fastboot.yaml").write_text("version: 1\nactions:\n- stage: {file: FSBL.bin}\n- continue: {}\n"
+                                       "- stage: {file: u-boot.itb}\n- continue: {}\n- getvar: {args: blk-size}\n"
+                                       "- multi_flash: {relate_partition: [gpt]}\n")
+    for name, data in (("FSBL.bin", "f"), ("u-boot.itb", "u"), ("bootfs.vfat", "b" * 300), ("rootfs.ext4", "r" * 700)):
+        (pkg / name).write_text(data)
+    (pkg / "partition_universal.json").write_text(json.dumps({"format": "gpt", "partitions": [
+        {"name": "bootfs", "image": "bootfs.vfat"}, {"name": "rootfs", "image": "rootfs.ext4"}]}))
+    log, state = tmp_path / "fastboot.log", tmp_path / "rom"
+    state.write_text("rom")
+    fb = tmp_path / "fastboot"
+    # in the ROM the port says "DFU download"; each continue drops it off the bus for a moment
+    fb.write_text(f"""#!/bin/sh
+echo "$*" >> {log}
+if [ "$1" = devices ]; then
+  [ -e {tmp_path}/away ] && {{ rm {tmp_path}/away; exit 0; }}
+  grep -q rom {state} && printf 'dfu\\tDFU download usb:2-1.1\\n' || printf 'x\\tfastboot usb:2-1.1\\n'
+  exit 0
+fi
+case "$3 $4" in
+  "getvar mtd-size") echo "mtd-size: NULL" >&2 ;;
+  "getvar blk-size") echo "blk-size: universal" >&2 ;;
+  "continue ") touch {tmp_path}/away; echo uboot > {state}; echo OKAY >&2 ;;
+  *) echo OKAY >&2 ;;
+esac
+""")
+    fb.chmod(0o755)
+    hook = ROOT / "packs" / "spacemit" / "hooks" / "flash" / "spacemit-pkg"
+    req = {"usb": "usb:2-1.1", "fastboot": str(fb), "package_dir": str(pkg), "artifacts": {}, "args": {"port_timeout": 5}}
+    r = subprocess.run([sys.executable, str(hook)], input=json.dumps(req), capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stdout + r.stderr
+    lines = r.stdout.strip().splitlines()
+    result = json.loads(lines[-1])
+    assert [f["partition"] for f in result["flashed"]] == ["gpt", "bootfs", "rootfs"]
+    calls = [l for l in log.read_text().splitlines() if not l.startswith("devices")]
+    assert calls[:4] == [f"-s usb:2-1.1 stage {pkg}/FSBL.bin", "-s usb:2-1.1 continue",
+                         f"-s usb:2-1.1 stage {pkg}/u-boot.itb", "-s usb:2-1.1 continue"]
+    pcts = [json.loads(l)["progress"] for l in lines[:-1] if l.startswith('{"progress"')]
+    assert pcts == sorted(pcts) and pcts[-1] == 100 and len(pcts) == 3
+    assert pkg.is_dir() and (pkg / "rootfs.ext4").exists()              # the caller's directory is left alone
+
+
 def test_a_board_whose_fdl_is_not_known_says_what_to_set():
     import pytest
 

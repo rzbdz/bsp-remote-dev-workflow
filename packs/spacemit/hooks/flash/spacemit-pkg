@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""flash/spacemit-pkg: flash a SpacemiT pack_image zip over fastboot (vendor order).
+"""flash/spacemit-pkg: flash a SpacemiT pack_image package over fastboot (vendor order).
 
-The board must already run a U-Boot that answers fastboot (the recipe stages it).
+The package is a zip (`artifacts.flash-zip`, from a boot recipe) or an unpacked directory
+(`package_dir`, from `bsp dut flash`). The board must run a U-Boot that answers fastboot: a boot
+recipe stages it first; with `package_dir`, a board still in the boot ROM's download mode is brought
+up by the package's own fastboot.yaml `stage`/`continue` actions before the first flash.
 request : {"usb": "usb:2-1.2", "fastboot": "fastboot",
-           "artifacts": {"flash-zip": "/path/spacemit_k3_flash_image_*.zip"},
-           "args": {"media": ["mtd", "gpt"], "skip": ["rootfs"], "dry_run": false}}
+           "artifacts": {"flash-zip": "/path/spacemit_k3_flash_image_*.zip"}  (or "package_dir": "/dir"),
+           "args": {"media": ["mtd", "gpt"], "skip": ["rootfs"], "dry_run": false,
+                    "rom_product": "DFU download", "port_timeout": 30}}
 result  : {"flashed": [{"layout": "partition_4M.json", "partition": "fsbl", "image": "...", "s": 1.2}, ...],
            "layouts": [...], "seconds": 93.1}
 Layout files follow fastboot.yaml `multi_flash`: partition_<getvar mtd-size>.json for NOR (format mtd)
@@ -14,6 +18,7 @@ and partition_<getvar blk-size>.json for block media (format gpt); a layout is w
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -33,21 +38,107 @@ def getvar(binary, usb, name):
     return m.group(1) if m and rc == 0 else None
 
 
+def port_line(binary, usb):
+    """The `fastboot devices -l` line of the device on `usb` (None when it is not on the bus)."""
+    try:
+        r = subprocess.run([binary, "devices", "-l"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    for line in (r.stdout + r.stderr).splitlines():
+        if re.search(rf"(?<!\S){re.escape(usb)}(?!\S)", line):
+            return line
+    return None
+
+
+def wait_port(binary, usb, timeout):
+    """Wait for the device to leave the bus (a continue hands over) and come back; its line, or None."""
+    t_end, gone = time.monotonic() + timeout, False
+    while time.monotonic() < t_end:
+        line = port_line(binary, usb)
+        if line is None:
+            gone = True
+        elif gone or time.monotonic() > t_end - timeout + 5:
+            return line
+        time.sleep(0.5)
+    return None
+
+
+def bring_up(work, binary, usb, args):
+    """A board in the boot ROM's download mode: run the package's fastboot.yaml stage/continue actions that come
+    before its first flash, so a U-Boot that answers fastboot runs. Returns None, or an error result."""
+    rom = args.get("rom_product", "DFU download")
+    line = port_line(binary, usb)
+    if not line or rom not in line:
+        return None
+    path = os.path.join(work, "fastboot.yaml")
+    if not os.path.exists(path):
+        return {"error": f"the board is in the boot ROM's download mode and the package has no fastboot.yaml",
+                "hint": "bring U-Boot up first (a recipe stage step), or flash a package with fastboot.yaml"}
+    try:
+        import yaml
+    except ImportError:
+        return {"error": "PyYAML is not installed on this host", "hint": "pip install pyyaml (or apt install python3-yaml)"}
+    actions = (yaml.safe_load(open(path)) or {}).get("actions") or []
+    print(f"{usb} is in boot ROM download mode: bringing U-Boot up with fastboot.yaml")
+    for act in actions:
+        (kind, data), = act.items() if isinstance(act, dict) and len(act) == 1 else [(None, None)]
+        if kind in ("flash", "multi_flash"):
+            break
+        if kind == "stage":
+            f = os.path.join(work, (data or {}).get("file", ""))
+            if not os.path.isfile(f):
+                return {"error": f"fastboot.yaml stages {(data or {}).get('file')!r}, which the package lacks"}
+            rc, out = fb(binary, usb, "stage", f, timeout=float((data or {}).get("timeout") or 300))
+            print(f"stage {os.path.basename(f)}: {out.splitlines()[-1] if out else rc}")
+            if rc != 0 or "FAILED" in out:
+                return {"error": f"staging {os.path.basename(f)} failed: {out[-200:]}"}
+        elif kind == "continue":
+            rc, out = fb(binary, usb, "continue", timeout=30)
+            if rc != 0 or "FAILED" in out:
+                return {"error": f"fastboot continue failed: {out[-200:]}"}
+            line = wait_port(binary, usb, float(args.get("port_timeout", 30)))
+            if not line:
+                return {"error": f"the download port did not come back on {usb} after continue",
+                        "hint": "check the console: did the staged loader start?"}
+            print(f"continued; port back: {' '.join(line.split())}")
+    return None
+
+
 def main():
     req = json.loads(sys.stdin.read())
     usb, binary = req["usb"], req.get("fastboot", "fastboot")
     args = req.get("args") or {}
     media = args.get("media", ["mtd", "gpt"])
     skip = set(args.get("skip", []))
-    pkg = (req.get("artifacts") or {}).get("flash-zip")
-    if not pkg or not os.path.exists(pkg):
-        print(json.dumps({"error": "no flash-zip artifact", "hint": "build it: bsp sdk build <sdk> pack-image"}))
-        return 1
     t0 = time.monotonic()
-    work = tempfile.mkdtemp(prefix="bsp-flash-")
-    with zipfile.ZipFile(pkg) as z:
-        z.extractall(work)
-    print(f"unpacked {os.path.basename(pkg)} ({len(os.listdir(work))} entries)")
+    pkg_dir = req.get("package_dir")
+    if pkg_dir:
+        if not os.path.isdir(pkg_dir):
+            print(json.dumps({"error": f"package_dir {pkg_dir} is not a directory"}))
+            return 1
+        work, pkg = pkg_dir, pkg_dir
+        print(f"package {os.path.basename(pkg)} ({len(os.listdir(work))} entries)")
+        failed = bring_up(work, binary, usb, args)
+        if failed:
+            print(json.dumps(failed))
+            return 1
+    else:
+        pkg = (req.get("artifacts") or {}).get("flash-zip")
+        if not pkg or not os.path.exists(pkg):
+            print(json.dumps({"error": "no flash-zip artifact", "hint": "build it: bsp sdk build <sdk> pack-image"}))
+            return 1
+        work = tempfile.mkdtemp(prefix="bsp-flash-")
+        with zipfile.ZipFile(pkg) as z:
+            z.extractall(work)
+        print(f"unpacked {os.path.basename(pkg)} ({len(os.listdir(work))} entries)")
+    try:
+        return flash(req, work, pkg, binary, usb, args, media, skip, t0)
+    finally:
+        if work != pkg_dir:
+            shutil.rmtree(work, ignore_errors=True)
+
+
+def flash(req, work, pkg, binary, usb, args, media, skip, t0):
 
     sizes = {"mtd": getvar(binary, usb, "mtd-size"), "gpt": getvar(binary, usb, "blk-size")}
     print(f"device reports mtd-size={sizes['mtd']} blk-size={sizes['gpt']}")
@@ -89,11 +180,15 @@ def main():
         return 1
 
     flashed, failed = [], []
+    plans = []
     for fmt, name in layouts:
         table = json.load(open(os.path.join(work, name)))
-        plan = [(fmt, os.path.join(work, name))] + [
+        plans.append((name, [(fmt, os.path.join(work, name))] + [
             (p["name"], os.path.join(work, p["image"])) for p in table["partitions"]
-            if p.get("image") and p["name"] not in skip]
+            if p.get("image") and p["name"] not in skip]))
+    total = sum(os.path.getsize(i) for _, plan in plans for _, i in plan if os.path.exists(i)) or 1
+    done = 0
+    for name, plan in plans:
         for part, image in plan:
             if not os.path.exists(image):
                 print(f"skip {part}: {os.path.relpath(image, work)} not in package")
@@ -111,6 +206,8 @@ def main():
                 break
             print(f"{name}: flash {part} <- {rel} ({os.path.getsize(image):,} B) {secs}s")
             flashed.append({"layout": name, "partition": part, "image": rel, "s": secs})
+            done += os.path.getsize(image)
+            print(json.dumps({"progress": round(done * 100 / total, 1), "msg": f"{part} done"}), flush=True)
     result = {"flashed": flashed, "failed": failed, "layouts": [n for _, n in layouts],
               "seconds": round(time.monotonic() - t0, 1), "package": os.path.basename(pkg)}
     if failed:
