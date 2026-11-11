@@ -92,7 +92,9 @@ CONF=$SITE/hosts/$ID.yaml
   echo "  dut:"
   echo "    smtty: $PREFIX/current/venv/bin/smtty"
   echo "    serial_mux: $PREFIX/current/venv/bin/serial-mux"
-  echo "    serial_log_dir: /var/lib/bsp/serial-logs"
+  # serial-mux keeps its sockets, runtime and logs under ~/.serial-mux of the user it runs as; bspd finds them beside
+  # serial_log_dir, so that stays serial-mux's own.
+  echo "    serial_log_dir: $(getent passwd root | cut -d: -f6)/.serial-mux/logs"
   echo "    fastboot: fastboot"
   echo "    probe: {watch_s: 3.0, pulse_ms: 1000}"
 } > "$CONF.new"
