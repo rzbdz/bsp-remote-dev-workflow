@@ -205,6 +205,7 @@ def test_flash_uploaded_package_runs_the_hook_with_progress(host):
     assert any("55%" in l for l in job["lines"]) and any("flashing usb:0-0" in l for l in job["lines"])
     req = json.loads((host.tmp / "flash.json").read_text())
     assert req["files"] == ["fastboot.yaml", "partition_universal.json", "rootfs.ext4"]
+    assert req["timeout"] == 3600
     assert req["usb"] == "usb:0-0" and req["dut"] == "mock-board" and req["artifacts"]["package"].endswith("pkg.tgz")
     assert not Path(req["package_dir"]).exists()                  # the unpacked copy is gone afterwards
     assert any(j["id"] == r["job"] and j["progress"] == 100 for j in _call(host, "job_list"))

@@ -45,9 +45,11 @@ correlating reactions — and calls these hooks for everything hardware-specific
 
 Boot recipe `hook` steps call them with the SDK's artifacts. `bsp dut flash` calls them with a
 package: `package_dir` is the unpacked package (a directory the flasher may read but not keep;
-it is removed afterwards), `artifacts.package` the package file (and `artifacts.flash-zip` when it
-is a zip), `images` the SoC profile's images (`{key: path}`) and `args` the host config's
-`modules.dut.flash.args`. The board is already in download mode on `usb` unless the caller asked
-for `--no-reset`. A flasher reports progress with `{"progress": N}` lines and fails by exiting
-non-zero or with an `"error"` (and `"hint"`) in its result. The flasher a board uses is its
-`flash.flasher`, else its SoC profile's `flash.flasher`, else `spacemit-pkg`.
+it is removed afterwards), `artifacts.package` the package file (and `artifacts.flash-zip` when
+it is a zip), `images` the SoC profile's images (`{key: path}`) and `args` the host config's
+`modules.dut.flash.args`; `timeout` is how many seconds the hook has before it gets SIGTERM (a
+flasher with a time limit of its own can stop a little earlier, cleanly). The board is already
+in download mode on `usb` unless the caller asked for `--no-reset`. A flasher reports progress
+with `{"progress": N}` lines and fails by exiting non-zero or with an `"error"` (and `"hint"`)
+in its result. The flasher a board uses is its `flash.flasher`, else its SoC profile's
+`flash.flasher`, else `spacemit-pkg`.

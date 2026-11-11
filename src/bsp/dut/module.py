@@ -547,7 +547,7 @@ class DutModule(Module):
                 if flashpkg.kind_of(path) == "zip":
                     artifacts["flash-zip"] = str(path)
                 req = {"dut": dut, "usb": b.spec.usb, "console": b.console.alias, "fastboot": b.fastboot.binary,
-                       "package_dir": str(pkg_dir), "artifacts": artifacts, "images": images,
+                       "package_dir": str(pkg_dir), "artifacts": artifacts, "images": images, "timeout": timeout,
                        "args": dict(self.flash_cfg.get("args") or {})}
                 try:
                     res = self.hooks.run("flash", name, req, timeout=timeout, log=log,
