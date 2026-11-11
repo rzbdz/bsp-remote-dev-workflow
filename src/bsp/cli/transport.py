@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import socket
 import subprocess
 import urllib.error
@@ -100,8 +101,10 @@ class HttpTransport:
 def _ssh_base(target: str) -> list[str]:
     cdir = Path(os.environ.get("XDG_RUNTIME_DIR") or Path.home() / ".cache") / "bsp-ssh"
     cdir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # BSP_SSH_OPTIONS: more ssh options, for a program driving bsp with ssh setup of its own (boardlab: its key).
+    extra = shlex.split(os.environ.get("BSP_SSH_OPTIONS", ""))
     return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=accept-new",
-            "-o", "ControlMaster=auto", "-o", f"ControlPath={cdir}/%r@%h:%p", "-o", "ControlPersist=300", target]
+            "-o", "ControlMaster=auto", "-o", f"ControlPath={cdir}/%r@%h:%p", "-o", "ControlPersist=300", *extra, target]
 
 
 class SshTransport:

@@ -191,3 +191,17 @@ def test_announcer_is_poked_by_port_changes():
     bus.publish("dut.ports", added={"tty": ["/dev/ttyUSB3"]})
     assert sent.wait(2)                       # at once, not an hour later
     a.stop()
+
+
+def test_an_ssh_url_reaches_bspd_through_ssh(monkeypatch):
+    """`--url ssh://user@host:port` is bspd on that machine's loopback port, reached through ssh, with the ssh options a
+    program driving bsp adds (BSP_SSH_OPTIONS: boardlab's own key)."""
+    from bsp.cli.remotes import RemoteStore
+    from bsp.cli.transport import SshTransport, _ssh_base
+
+    r = RemoteStore(stateless=True).select(url="ssh://root@lab-1:8766")[0]
+    [t] = r.transports()
+    assert isinstance(t, SshTransport) and t.target == "root@lab-1" and t.port == 8766
+    monkeypatch.setenv("BSP_SSH_OPTIONS", "-i /var/lib/boardlab/ssh/id_ed25519 -o IdentitiesOnly=yes")
+    base = _ssh_base("root@lab-1")
+    assert base[-1] == "root@lab-1" and base[-5:-1] == ["-i", "/var/lib/boardlab/ssh/id_ed25519", "-o", "IdentitiesOnly=yes"]

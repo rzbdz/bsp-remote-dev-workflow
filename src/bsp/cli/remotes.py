@@ -56,7 +56,7 @@ class Remote:
 
     @property
     def urls(self) -> list[str]:
-        return [self.url, *self.fallback_urls]
+        return [u for u in (self.url, *self.fallback_urls) if u]
 
     def transports(self) -> list[Any]:
         from .transport import HttpTransport, SshTransport
@@ -164,6 +164,13 @@ class RemoteStore:
     def select(self, url: str | None = None, remote: str | None = None, token: str | None = None) -> list[Remote]:
         """Return the instance(s) a command should go to."""
         if url:
+            # ssh://user@host[:port]: bspd on that machine's loopback port, through ssh (a host boardlab set up).
+            if url.startswith("ssh://"):
+                from urllib.parse import urlsplit
+
+                sp = urlsplit(url)
+                target = f"{sp.username}@{sp.hostname}" if sp.username else str(sp.hostname)
+                return [Remote("url", "", token, source="flag", ssh=target, port=sp.port or 8765)]
             return [Remote("url", url.rstrip("/"), token, source="flag")]
         spec = remote or (None if os.environ.get("BSP_URL") else os.environ.get("BSP_REMOTE"))
         if spec:
