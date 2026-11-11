@@ -95,6 +95,22 @@ def build_commands(mod: "DutModule") -> list[Command]:
             render=lambda r: f"job {r['job']}: {r['dut']} boot {len(r['files'])} file(s)",
             description="Each file: fastboot stage + continue, then wait for the download port to come back "
                         "before the next. Background job: follow it with `bsp job get`. Never flashes."),
+        cmd("dut.flash", "Write a package (flash images and their layout) to the board",
+            mod.flash,
+            [DUT, Param("package", help="http(s) URL the host downloads, or sha256 of an uploaded package file",
+                        positional=False),
+             Param("sha256", help="expected sha256 of the package at the URL (checked after download)",
+                   required=False),
+             Param("flasher", help="flash hook to use (default: the board's, its SoC's, then spacemit-pkg)",
+                   required=False),
+             LEASE,
+             Param("timeout", "number", "seconds the flasher may take", required=False, default=3600),
+             Param("reset", "boolean", "enter download mode first", required=False, default=True)],
+            render=lambda r: f"job {r['job']}: {r['dut']} flash {r['package']} with {r['flasher']}",
+            description="The package is a .tar.gz, .tgz, .tar or .zip (the CLI sends a local directory as a .tar). "
+                        "The host unpacks it, puts the board in download mode and runs the flash hook "
+                        "`flash/<flasher>` on the unpacked directory. Background job: follow it with `bsp job get`; "
+                        "its progress is a percent when the flasher reports one."),
         cmd("artifact.has", "Whether a file with this sha256 is in the host's artifact cache",
             mod.artifact_has, [Param("sha256", help="64 hex digits")], mutating=False,
             render=lambda r: f"{r['sha256'][:16]}...: " + (f"cached ({r['size']:,} B, {r['file']})"

@@ -37,8 +37,17 @@ console / fastboot regexes), then extracts `identify.fields` from the console, d
 The orchestrator (`src/bsp/dut/probe.py`) owns the risky part — pulsing GPIOs and
 correlating reactions — and calls these hooks for everything hardware-specific.
 
-## flash/ — download (flash-to-media) mechanisms, used by boot recipe `hook` steps
+## flash/ — download (flash-to-media) mechanisms, used by boot recipe `hook` steps and `bsp dut flash`
 
 | hook | request | result |
 |---|---|---|
 | `flash/<name>` | `{"dut", "usb", "console", "fastboot", "artifacts": {role: path}, "args": {...}}` | `{"flashed": [partitions], ...}` |
+
+Boot recipe `hook` steps call them with the SDK's artifacts. `bsp dut flash` calls them with a
+package: `package_dir` is the unpacked package (a directory the flasher may read but not keep;
+it is removed afterwards), `artifacts.package` the package file (and `artifacts.flash-zip` when it
+is a zip), `images` the SoC profile's images (`{key: path}`) and `args` the host config's
+`modules.dut.flash.args`. The board is already in download mode on `usb` unless the caller asked
+for `--no-reset`. A flasher reports progress with `{"progress": N}` lines and fails by exiting
+non-zero or with an `"error"` (and `"hint"`) in its result. The flasher a board uses is its
+`flash.flasher`, else its SoC profile's `flash.flasher`, else `spacemit-pkg`.

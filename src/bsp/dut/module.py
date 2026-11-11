@@ -9,6 +9,7 @@ Commands (`commands.py`) are the atomic layer under `bsp dut ...` / `bsp probe`.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -67,6 +68,8 @@ class DutModule(Module):
         self.serial_log_dir = config.get("serial_log_dir", os.path.expanduser("~/.serial-mux/logs"))
         self.fastboot_bin = config.get("fastboot", "fastboot")
         self.probe_cfg = config.get("probe") or {}
+        # `dut flash`: packages the host takes (uploaded or downloaded), and where it unpacks them
+        self.flash_cfg = config.get("flash") or {}
         # The site's catalog, under the registry's copy when this host follows one (see server/catalog_follow.py).
         self._sdk_roots = layered("sdk", site)
         self._catalog_layer = ctx.state_dir / "catalog"
@@ -81,6 +84,7 @@ class DutModule(Module):
                                     state / "duts.json")
         self.leases = LeaseManager(state / "leases.json")
         self.store = ArtifactStore(state / "artifacts")
+        self._flash_work = state / "flash"
         from .consoles import ConsoleManager
 
         self.consoles = ConsoleManager(self.serial_mux, self.serial_log_dir)
@@ -459,6 +463,118 @@ class DutModule(Module):
         self._event("boot", dut=dut, files=names, job=job.id)
         return {"job": job.id, "dut": dut, "files": [{k: i[k] for k in ("name", "sha256", "size")} for i in items],
                 "host": self.ctx.host_id}
+
+    # -------------------------------------------------------------- flash --
+    DEFAULT_FLASHER = "spacemit-pkg"
+
+    def flasher_for(self, b: Board, flasher: str | None = None) -> tuple[str, str]:
+        """Which flash hook writes this board's packages, and why: the one asked for, else the board's
+        `flash.flasher`, else its SoC profile's `flash.flasher`, else the default."""
+        if flasher:
+            return flasher, "asked for"
+        own = (b.spec.raw.get("flash") or {}).get("flasher")
+        if own:
+            return own, f"{b.spec.id}'s flash.flasher"
+        soc = (self.socs.get(b.spec.soc).get("flash") or {}).get("flasher") if b.spec.soc else None
+        if soc:
+            return soc, f"SoC {b.spec.soc}'s flash.flasher"
+        return self.DEFAULT_FLASHER, "the default"
+
+    def flash(self, dut: str, package: str, sha256: str | None, flasher: str | None, lease: str | None,
+              timeout: float, reset: bool) -> dict[str, Any]:
+        """Write a package to the board: enter download mode, then run the flash hook on the unpacked package."""
+        import shutil
+        import tempfile
+        from pathlib import Path
+
+        from ..core.errors import NotFound
+        from . import flashpkg
+
+        b = self.board(dut)
+        self.leases.check(dut, lease)
+        self._guard_busy(dut)
+        usb = str(b.spec.fastboot.get("usb") or "")
+        if not usb or "UNKNOWN" in usb.upper():
+            raise InvalidRequest(f"{dut} has no download port (fastboot.usb) recorded",
+                                 hint=f"set it: `bsp dut set {dut} --usb usb:<bus>-<port>` "
+                                      "(the path `fastboot devices -l` shows in download mode)")
+        name, why = self.flasher_for(b, flasher)
+        available = self.hooks.names("flash")
+        if name not in available:
+            raise NotFound(f"no flasher {name!r} on {self.ctx.host_id} ({why})",
+                           hint=f"flashers here: {', '.join(available) or '(none)'}; choose one with --flasher, or set "
+                                "flash.flasher on the board or its SoC profile")
+        max_bytes = int(self.flash_cfg.get("max_package_bytes") or flashpkg.DEFAULT_MAX_BYTES)
+        package = (package or "").strip()
+        url = None
+        if flashpkg.is_url(package):
+            url = flashpkg.check_url(package)
+            if sha256 and not re.fullmatch(r"[0-9a-fA-F]{64}", sha256):
+                raise InvalidRequest(f"not a sha256: {sha256!r}", hint="64 hex digits")
+            label = package.rsplit("/", 1)[-1] or package
+        else:
+            if not re.fullmatch(r"[0-9a-f]{64}", package):
+                raise InvalidRequest(f"package {package!r} is neither an http(s) URL nor the sha256 of an uploaded file",
+                                     hint="`bsp dut flash DUT --package PATH` uploads a local file or directory for you")
+            if sha256 and sha256.lower() != package:
+                raise InvalidRequest("sha256 does not match the uploaded package's")
+            label = self.store.get(package).name
+        runner = b.runner(self)
+        images = {k: v["path"] for k, v in (self.socs.get(b.spec.soc).get("images") or {}).items() if v.get("path")}
+
+        def body(log) -> dict[str, Any]:
+            import time
+
+            t0 = time.monotonic()
+            log(f"flash {dut} with {name} ({why}): package {label}")
+            if url:
+                got = flashpkg.fetch(self.store, url, sha256, log, max_bytes)
+                path = Path(got["path"])
+            else:
+                path = self.store.get(package)
+            self._flash_work.mkdir(parents=True, exist_ok=True)
+            work = Path(tempfile.mkdtemp(prefix=f"{dut}-", dir=self._flash_work))
+            try:
+                pkg_dir = flashpkg.unpack(path, work / "pkg", max_bytes=4 * max_bytes)
+                files = sum(1 for p in pkg_dir.rglob("*") if p.is_file())
+                log(f"unpacked {path.name}: {files} file(s)")
+                if reset:
+                    runner.enter_fdl(log)
+                elif not b.fastboot.state():
+                    raise HardwareError(f"{dut}: no download port on {b.spec.usb}",
+                                        hint=f"put it in download mode first (`bsp dut reset {dut}`), or drop --no-reset")
+                artifacts = {"package": str(path)}
+                if flashpkg.kind_of(path) == "zip":
+                    artifacts["flash-zip"] = str(path)
+                req = {"dut": dut, "usb": b.spec.usb, "console": b.console.alias, "fastboot": b.fastboot.binary,
+                       "package_dir": str(pkg_dir), "artifacts": artifacts, "images": images,
+                       "args": dict(self.flash_cfg.get("args") or {})}
+                try:
+                    res = self.hooks.run("flash", name, req, timeout=timeout, log=log,
+                                         progress=getattr(log, "progress", None))
+                except BspError as e:
+                    if e.code == "hardware_timeout":
+                        e.hint = "give it more time with --timeout, and check what the flasher printed last"
+                    raise
+                if res.code != 0 or res.data.get("error"):
+                    err = res.data.get("error") or "the flasher did not flash"
+                    if isinstance(err, dict):
+                        err = err.get("message") or json.dumps(err)
+                    raise HardwareError(f"flash/{name}: {err}", hint=res.data.get("hint") or "",
+                                        details={"result": res.data, "stdout": res.lines[-20:]})
+            finally:
+                shutil.rmtree(work, ignore_errors=True)
+            out = {"dut": dut, "flasher": name, "package": path.name, "elapsed_s": round(time.monotonic() - t0, 1)}
+            if "flashed" in res.data:
+                out["flashed"] = res.data["flashed"]
+            log(f"flashed {dut} with {name} in {out['elapsed_s']}s"
+                + (f": {len(out['flashed'])} partition(s)" if isinstance(out.get("flashed"), list) else ""))
+            self._event("flashed", dut=dut, flasher=name, package=path.name)
+            return out
+
+        job = self._start_job(dut, f"flash {label} [{name}]", body, kind="flash", flasher=name)
+        self._event("flash", dut=dut, flasher=name, package=label, job=job.id)
+        return {"job": job.id, "dut": dut, "flasher": name, "package": label, "host": self.ctx.host_id}
 
     def artifact_has(self, sha256: str) -> dict[str, Any]:
         p = self.store.find(sha256)

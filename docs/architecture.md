@@ -73,7 +73,7 @@ flowchart TB
 | Layer | Code | Its own commands | Extension point |
 |---|---|---|---|
 | Relay controller | `gpio_relay/`, `dut/control.py` | `bsp gpio`, `bsp relay`, `bsp button` | `GpioBackend`, `ControlBackend` |
-| Download path | `dut/hostio.py`, `dut/boot.py` | `bsp dut stage`, `present`, `boot` | recipe steps, `hooks/flash/*` |
+| Download path | `dut/hostio.py`, `dut/boot.py`, `dut/flashpkg.py` | `bsp dut stage`, `present`, `boot`, `flash` | recipe steps, `hooks/flash/*` |
 | Serial console service | `dut/consoles.py`, serial-mux | `bsp dut pipe`, `console`, `log` | serial-mux transports |
 | DUT manager | `dut/module.py`, `dut/commands.py`, `dut/leases.py`, `dut/probe.py` | `bsp dut …`, `bsp probe` | DUT specs, `hooks/probe/*` |
 

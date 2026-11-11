@@ -32,6 +32,7 @@ How hosts are chosen without `-r`/`--url` is described in
 | `bsp dut reset DUT [--no-fdl] [--no-wait] [--timeout S]` | Reset into download mode and wait for it (`--no-fdl`: boot the board's own system; a board whose FDL is strapped boots its media through the SoC's media boot when it has one) |
 | `bsp dut boot DUT --sdk SDK [--method load\|download] [--variant V] [--no-wait] [--timeout S]` | Run the SDK's boot recipe; streams progress, exit code is the result |
 | `bsp dut boot DUT --files FILE… [--no-reset] [--first-wait S] [--later-wait S] [--port-timeout S] [--no-wait]` | Boot from RAM with local files in order (see [Booting local files](#booting-local-files)) |
+| `bsp dut flash DUT --package PATH\|URL [--sha256 HEX] [--flasher NAME] [--timeout S] [--no-reset] [--no-wait]` | Write a package (images and their layout) to the board's media (see [Flashing a package](#flashing-a-package)) |
 | `bsp dut stage DUT FILE [--no-continue] [--timeout S]` | Send a local file to the host (once, by sha256) and load it into RAM: `fastboot stage` + `continue` |
 | `bsp dut present DUT` | Whether the board's download/fastboot port is on the USB bus |
 | `bsp dut console DUT "CMD" [--expect RE] [--timeout S]` | Run one shell command on the console and print its output |
@@ -115,6 +116,29 @@ the job log. Nothing is flashed.
 Programs can do the same over HTTP: `PUT /api/v1/artifacts/<sha256>?name=FILE` with the file as
 the body (checked against the sha256; `GET` the same URL to see whether it is cached), then
 `dut_stage` or `dut_boot_files` with the sha256 values.
+
+### Flashing a package
+
+`bsp dut flash DUT --package PKG` writes a package to the board's storage. `PKG` is a local
+`.tar.gz`, `.tgz`, `.tar` or `.zip`, or a local directory (sent as a `.tar`), or an `http(s)://`
+URL that the board host downloads itself (into its artifact cache, checked against `--sha256`
+when given; other schemes are refused). A host takes packages up to 16 GiB by default
+(`modules.dut.flash.max_package_bytes` in the host config). The host unpacks the package into a
+fresh directory (entries reaching outside it, links and special files are refused; an archive
+holding a single top-level directory unpacks to that directory), puts the board into download
+mode (skip with `--no-reset`) and runs the flash hook `flash/<flasher>` on the directory (see
+[hooks/README.md](../hooks/README.md)).
+
+The flasher is `--flasher`, else the board's `flash.flasher`, else its SoC profile's
+`flash.flasher`, else `spacemit-pkg` (a package with `fastboot.yaml` and `partition_*.json`
+layouts, or a flash zip). The flash runs as a background job of kind `flash` under your lease;
+when the flasher reports progress the job has a percent (`bsp job get`, `bsp job list`) and the
+CLI prints it as it comes. With `--json` the result is `{"job", "lines", "elapsed_s", "flasher",
+"flashed"}`. `--timeout` (default 3600 s) bounds the flasher; when it runs out the flasher gets
+SIGTERM first so it can let go of the USB device.
+
+Over HTTP: upload the package as an artifact (see above), then `dut_flash` with `package` set to
+its sha256, or to the URL.
 
 ### Console pipe
 

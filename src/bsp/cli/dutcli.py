@@ -191,6 +191,8 @@ def dut_cmd(fleet: Fleet, args, book: LeaseBook) -> tuple[Any, str]:
         if args.no_wait:
             return r, f"follow with: bsp job get {r['job']} -r {h.id} --wait 30"
         return follow_job(h, r["job"], out, args.timeout)
+    if c == "flash":
+        return _flash(h, dut, args, book)
     if c == "console" and not args.command:
         return _attach(h, dut, args)
     if c == "console":
@@ -222,12 +224,14 @@ def dut_cmd(fleet: Fleet, args, book: LeaseBook) -> tuple[Any, str]:
     raise InvalidRequest(f"unknown dut action {c}")
 
 
-def follow_job(h: HostHandle, job: str, out, timeout: float) -> tuple[Any, str]:
+def follow_job(h: HostHandle, job: str, out, timeout: float, lines: list[str] | None = None) -> tuple[Any, str]:
     since, t0 = 0, time.time()
     while True:
         v = _ok(h, h.call("job_get", {"id": job, "since": since, "wait": 5}, timeout=60))
         for line in v["lines"]:
             print(f"  {line}", file=out, flush=True)
+        if lines is not None:
+            lines.extend(v["lines"])
         since = v["next"]
         if v["status"] != "running":
             break
@@ -270,6 +274,70 @@ def upload(h: HostHandle, path: str, out=None) -> dict[str, Any]:
     elif out:
         print(f"  {name} already on {h.id} (sha256 {sha[:12]})", file=out, flush=True)
     return {"sha256": sha, "name": name, "size": size, "path": os.path.abspath(path)}
+
+
+def _flash(h: HostHandle, dut: str, args, book: LeaseBook) -> tuple[Any, str]:
+    """`dut flash`: send the package (a local file or directory; a URL the host downloads itself), run the flash
+    job, follow it."""
+    import re
+    import tempfile
+    from urllib.parse import urlsplit
+
+    out = sys.stderr if args.json else sys.stdout
+    pkg = args.package
+    body: dict[str, Any] = {"dut": dut, "lease": _lease(args, book, dut), "flasher": args.flasher,
+                            "timeout": args.timeout, "reset": not args.no_reset}
+    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", pkg):
+        if urlsplit(pkg).scheme not in ("http", "https"):
+            raise InvalidRequest(f"package URL scheme {urlsplit(pkg).scheme!r} is not allowed",
+                                 hint="use an http(s) URL the board host can reach, or a local path")
+        body.update(package=pkg, sha256=args.sha256)
+    else:
+        if not os.path.exists(pkg):
+            raise InvalidRequest(f"no such file or directory: {pkg}")
+        with tempfile.TemporaryDirectory(prefix="bsp-flash-") as tmp:
+            path = _tar_dir(pkg, tmp) if os.path.isdir(pkg) else pkg
+            art = upload(h, path, out)
+        if args.sha256 and args.sha256.lower() != art["sha256"] and not os.path.isdir(pkg):
+            raise InvalidRequest(f"{pkg} hashes to {art['sha256']}, not {args.sha256}")
+        body.update(package=art["sha256"])
+    r = _ok(h, h.call("dut_flash", body, timeout=120))
+    print(f"{dut} @ {h.id}: flash {r['package']} with {r['flasher']}, job {r['job']}", file=out, flush=True)
+    if args.no_wait:
+        return r, f"follow with: bsp job get {r['job']} -r {h.id} --wait 30"
+    lines: list[str] = []
+    v, text = follow_job(h, r["job"], out, args.timeout + 300, lines)
+    res = v.get("result") or {}
+    result = {"job": r["job"], "lines": lines, "elapsed_s": v.get("elapsed_s"), "flasher": r["flasher"]}
+    if "flashed" in res:
+        result["flashed"] = res["flashed"]
+    return result, text
+
+
+def _tar_dir(src: str, tmp: str) -> str:
+    """A local package directory as one plain .tar (same tree, same bytes: the host caches it by sha256)."""
+    import tarfile
+
+    name = os.path.basename(os.path.normpath(os.path.abspath(src))) or "package"
+    dest = os.path.join(tmp, f"{name}.tar")
+
+    def clean(ti: tarfile.TarInfo) -> tarfile.TarInfo | None:
+        if not (ti.isfile() or ti.isdir()):
+            raise InvalidRequest(f"{ti.name} in {src} is not a file or directory",
+                                 hint="a package directory holds only files and directories")
+        ti.uid = ti.gid = 0
+        ti.uname = ti.gname = ""
+        return ti
+
+    with tarfile.open(dest, "w", format=tarfile.PAX_FORMAT) as t:
+        for root, dirs, files in os.walk(src):
+            dirs.sort()
+            rel = os.path.relpath(root, src)
+            arc = name if rel == "." else f"{name}/{rel}"
+            t.add(root, arcname=arc, recursive=False, filter=clean)
+            for f in sorted(files):
+                t.add(os.path.join(root, f), arcname=f"{arc}/{f}", recursive=False, filter=clean)
+    return dest
 
 
 class Quiet:
@@ -699,6 +767,18 @@ def add_parsers(sub) -> None:
     b.add_argument("--no-wait", action="store_true")
     b.add_argument("--timeout", type=float, default=900)
     b.add_argument("--lease")
+    fl = ds.add_parser("flash", help="write a package (images and their layout) to the board: a local .tar.gz/"
+                                     ".tgz/.tar/.zip or directory (sent to the host), or an http(s) URL the host "
+                                     "downloads; the host puts the board in download mode and runs a flash hook")
+    fl.add_argument("dut")
+    fl.add_argument("--package", required=True, metavar="PATH|URL")
+    fl.add_argument("--sha256", help="expected sha256 of the package (checked by the host after a download)")
+    fl.add_argument("--flasher", help="flash hook to use (default: the board's flash.flasher, its SoC's, then "
+                                      "spacemit-pkg)")
+    fl.add_argument("--lease")
+    fl.add_argument("--timeout", type=float, default=3600, help="seconds the flasher may take (default 3600)")
+    fl.add_argument("--no-reset", action="store_true", help="the board is already in download mode")
+    fl.add_argument("--no-wait", action="store_true", help="return the job id instead of following it")
     c = ds.add_parser("console", help="run a shell command on the DUT console (no command: interactive attach)")
     c.add_argument("dut")
     c.add_argument("command", nargs="*", help="e.g. 'dmesg | grep mytag' (quote pipes); omit to attach")
