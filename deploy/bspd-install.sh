@@ -69,8 +69,9 @@ cp -a . "$NEW/app"
 python3 -m venv "$NEW/venv"
 "$NEW/venv/bin/pip" install -q --disable-pip-version-check -U "pip>=24" || true
 EXTRAS=server; [[ $RELAY == gpiod ]] && EXTRAS=server,gpiod
-"$NEW/venv/bin/pip" install -q --disable-pip-version-check "$NEW/app[$EXTRAS]"
-[[ -f "$NEW/app/third_party/serial-mux/pyproject.toml" ]] && "$NEW/venv/bin/pip" install -q --disable-pip-version-check "$NEW/app/third_party/serial-mux"
+# Editable, from the tree beside it: bsp finds its packs (board pin maps, SoC profiles) next to its source.
+"$NEW/venv/bin/pip" install -q --disable-pip-version-check -e "$NEW/app[$EXTRAS]"
+[[ -f "$NEW/app/third_party/serial-mux/pyproject.toml" ]] && "$NEW/venv/bin/pip" install -q --disable-pip-version-check -e "$NEW/app/third_party/serial-mux"
 ln -sfn "$NEW" "$PREFIX/current.new" && mv -Tf "$PREFIX/current.new" "$PREFIX/current"
 for b in bsp smtty serial-mux; do [[ -x $PREFIX/current/venv/bin/$b ]] && ln -sfn "$PREFIX/current/venv/bin/$b" /usr/local/bin/$b; done
 # Old releases: keep the one before, drop the rest.
