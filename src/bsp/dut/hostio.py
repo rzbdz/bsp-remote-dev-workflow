@@ -307,10 +307,20 @@ class ArtifactStore:
         """Start storing an uploaded file under its sha256: `write()` the body, then `commit()`."""
         if not SHA256.fullmatch(sha256 or ""):
             raise InvalidRequest(f"not a sha256: {sha256!r}", hint="64 lowercase hex digits")
-        name = re.sub(r"[^A-Za-z0-9._+-]", "_", Path(name or "file").name)[:120] or "file"
-        if name.startswith("."):
-            name = "_" + name
-        return Upload(self, sha256, name)
+        return Upload(self, sha256, _clean_name(name))
+
+    def adopt(self, tmp: Path, sha256: str, name: str) -> Path:
+        """Move a file whose content was checked to hash to `sha256` into the cache (same filesystem)."""
+        have = self.find(sha256)
+        if have is not None:
+            tmp.unlink(missing_ok=True)
+            return have
+        if not SHA256.fullmatch(sha256 or ""):
+            raise InvalidRequest(f"not a sha256: {sha256!r}", hint="64 lowercase hex digits")
+        final = self.root / sha256 / _clean_name(name)
+        final.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(tmp, final)
+        return final
 
     def put(self, sha256: str, name: str, chunks) -> dict[str, Any]:
         up = self.upload(sha256, name)
@@ -320,6 +330,12 @@ class ArtifactStore:
             return up.commit()
         finally:
             up.abort()
+
+
+def _clean_name(name: str) -> str:
+    """A cached file's name: the base name, with only safe characters, never hidden."""
+    name = re.sub(r"[^A-Za-z0-9._+-]", "_", Path(name or "file").name)[:120] or "file"
+    return "_" + name if name.startswith(".") else name
 
 
 class Upload:
