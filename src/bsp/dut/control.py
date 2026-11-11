@@ -10,6 +10,7 @@
 FDL strategies (control.fdl.strategy):
     strapped        the board always boots to BROM download mode: reset == enter FDL
     button          hold the FDL line, pulse reset, release (needs control.fdl.pin)
+    unset           not known yet (a probe saw no download mode after a reset): entering FDL says what to set
 """
 
 from __future__ import annotations
@@ -93,6 +94,10 @@ class ControlBackend(ABC):
         if strategy == "button":
             self._fdl_button(log)
             return
+        if strategy == "unset":
+            raise InvalidRequest(f"{self.dut.id}: how this board enters download mode is not set",
+                                 hint=f"FDL strapped (a reset lands in download mode): bsp dut set {self.dut.id} --fdl strapped; "
+                                      f"an FDL line: bsp dut set {self.dut.id} --fdl button --fdl-pin <pin>")
         raise InvalidRequest(f"{self.dut.id}: unknown fdl strategy {strategy!r}", hint="use strapped or button")
 
     def _fdl_button(self, log: Log) -> None:
@@ -141,7 +146,8 @@ class GpioRelayControl(ControlBackend):
 
     def _fdl_button(self, log: Log) -> None:
         if not (self.cfg.get("fdl") or {}).get("pin"):
-            raise InvalidRequest(f"{self.dut.id}: fdl strategy `button` needs control.fdl.pin")
+            raise InvalidRequest(f"{self.dut.id}: fdl strategy `button` needs control.fdl.pin",
+                                 hint=f"bsp dut set {self.dut.id} --fdl-pin <pin>, or --fdl strapped if a reset lands in download mode")
         gpio = self._gpio()
         log(f"FDL: hold {self._alias('fdl')}, reset, release")
         gpio.switch(self._alias("fdl"), "on")

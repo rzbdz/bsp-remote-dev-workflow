@@ -133,7 +133,7 @@ def build_commands(mod: "DutModule") -> list[Command]:
              Param("usb", help="fastboot selector, e.g. usb:2-1.4", required=False, positional=False),
              Param("reset_pin", help="header pin of the reset line, e.g. P26", required=False, positional=False),
              Param("pulse_ms", "integer", "reset pulse width", required=False, positional=False),
-             Param("fdl", help="strapped | button", required=False, positional=False, choices=["strapped", "button"]),
+             Param("fdl", help="strapped | button | unset", required=False, positional=False, choices=["strapped", "button", "unset"]),
              Param("fdl_pin", help="header pin of the FDL line (fdl=button)", required=False, positional=False)],
             render=_render_status),
         cmd("dut.logins", "ssh console logins on this host: `ssh <login>@<host>` opens that DUT's console",

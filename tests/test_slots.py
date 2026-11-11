@@ -80,7 +80,9 @@ class FakeGpio:
         if noise:
             self.wiring.pop(f"{target}:noise")
             for name in noise:
-                (self.logs[name] / f"{date.today().isoformat()}.log").open("a").write("garbage\n")
+                (self.logs[name] / f"{date.today().isoformat()}.log").open("a").write("U-Boot 2024.01 (Jan 01 2026)\n")
+        for name in self.wiring.get(f"{target}:typing", []):
+            (self.logs[name] / f"{date.today().isoformat()}.log").open("a").write("~ # lsusb\nBus 001 Device 001\n~ # \n")
 
 
 def fake_host(tmp_path, monkeypatch, wiring, aliases=("s1", "s2"), **probe_cfg):
@@ -133,7 +135,7 @@ def test_probe_registers_each_board_as_found_and_tries_historic_lines_first(tmp_
 
 
 def test_probe_presses_an_ambiguous_line_again_and_says_why_nothing_was_found(tmp_path, monkeypatch):
-    # P33 resets the board on s1, but the first time s2's adapter also printed (it had just re-attached).
+    # P33 resets the board on s1, but the first time the board on s2 also booted (someone reset it).
     mod, gpio, added, slots = fake_host(tmp_path, monkeypatch, {"P33": ["s1"], "P33:noise": ["s2"]})
     res = probe_mod.Prober(mod, None, None, identify=False, default_sdks=None, register=False).run(lambda l: None)
     assert gpio.pulsed.count("P33") == 2
@@ -143,6 +145,19 @@ def test_probe_presses_an_ambiguous_line_again_and_says_why_nothing_was_found(tm
     before = len(gpio.pulsed)
     res = probe_mod.Prober(mod, None, "s2", identify=False, default_sdks=None, known=True).run(lambda l: None)
     assert len(gpio.pulsed) == before and res["proposals"] == []
+
+
+def test_probe_does_not_take_someone_typing_on_a_console_for_its_reset(tmp_path, monkeypatch):
+    # While P5 is pressed someone types in s1's shell; P33 is s1's reset line. A reset nothing sees lands in
+    # download mode is left for a person to say how it gets there, never a strategy that cannot run.
+    mod, gpio, added, slots = fake_host(tmp_path, monkeypatch, {"P5:typing": ["s1"], "P33": [("s1", "U-Boot 2024.01 (Jan)\n")]},
+                                        aliases=("s1",))
+    lines = []
+    res = probe_mod.Prober(mod, None, None, identify=False, default_sdks=None).run(lines.append)
+    [proposal] = res["proposals"]
+    assert proposal["spec"]["control"]["reset"]["pin"] == "P33"
+    assert proposal["spec"]["control"]["fdl"] == {"strategy": "unset"}
+    assert any("P5: console(s) s1 printed, but not a boot" in l for l in lines)
 
 
 def test_probe_skips_offline_slots_and_probes_only_the_slots_asked_for(tmp_path, monkeypatch):

@@ -420,3 +420,18 @@ esac
     assert result["layouts"] == ["partition_universal.json"] and not result["failed"]
     assert "device has no mtd medium (mtd-size=NULL); skipping mtd" in r.stdout
     assert "flash mtd" not in log.read_text() and "flash gpt" in log.read_text()
+
+
+def test_a_board_whose_fdl_is_not_known_says_what_to_set():
+    import pytest
+
+    from bsp.core.errors import InvalidRequest
+    from bsp.dut.catalog import spec_from_dict as parse_spec
+    from bsp.dut.control import make_control
+
+    spec = parse_spec({"id": "k3-s1", "host": "h", "board": "b", "console": {"alias": "s1"}, "fastboot": {"usb": "usb:1-1"},
+                       "control": {"backend": "gpio-relay", "reset": {"pin": "P33"}, "fdl": {"strategy": "unset"}}})
+    ctl = make_control(spec, lambda name: (_ for _ in ()).throw(AssertionError("no line is touched")))
+    with pytest.raises(InvalidRequest) as e:
+        ctl.enter_fdl(lambda line: None)
+    assert "not set" in e.value.message and "--fdl strapped" in e.value.hint

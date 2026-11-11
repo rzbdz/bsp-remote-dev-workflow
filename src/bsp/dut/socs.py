@@ -19,6 +19,11 @@ from pathlib import Path
 from typing import Any
 
 
+# What any board prints coming out of reset, profile or not.
+BOOT_BANNERS = (r"U-Boot( SPL)? 20\d\d", r"OpenSBI v?\d", r"Linux version \d", r"Booting Linux", r"Starting kernel",
+                r"\bBoot ?ROM\b", r"\bROM: ", r"\bDDR\b.*\b(init|training)\b")
+
+
 def _merge(a: dict, b: dict) -> dict:
     out = dict(a)
     for k, v in b.items():
@@ -78,6 +83,18 @@ class SocProfiles:
             if dm.get("fastboot") and re.search(dm["fastboot"], fastboot_product or ""):
                 return True
         return False
+
+    def looks_like_boot(self, text: str) -> bool:
+        """Does this console text look like a board coming out of reset (boot ROM, boot loader or kernel banner),
+        rather than a shell someone is typing in? Any SoC's fingerprint, download-mode or boot-stage line counts,
+        and the usual boot banners of boards bsp has no profile for."""
+        if self.detect(text)[0] or self.in_download_mode(text, ""):
+            return True
+        for p in self.profiles.values():
+            for stage in (p.get("identify") or {}).get("sequence") or []:
+                if stage.get("console") and re.search(stage["console"], text):
+                    return True
+        return any(re.search(rx, text) for rx in BOOT_BANNERS)
 
     def usb_vids(self) -> list[str]:
         return sorted({v.lower() for p in self.profiles.values() for v in p.get("usb_vids", [])})

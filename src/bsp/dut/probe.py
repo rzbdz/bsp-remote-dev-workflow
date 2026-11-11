@@ -314,11 +314,16 @@ class Prober:
             log(f"{pin['target']}: skip ({e.message})")
             return None
         time.sleep(self.watch_s)
-        spoke = {}
+        spoke, chatter = {}, []
         for cid, c in pending.items():
             text = raw[cid].take().decode("utf-8", "replace") if cid in raw else self._read(c, marks[cid])
-            if text.strip():
+            # A console that printed something but not a boot (a shell someone is typing in) was not reset by it.
+            if text.strip() and self.socs.looks_like_boot(text):
                 spoke[cid] = text
+            elif text.strip():
+                chatter.append(cid)
+        if chatter:
+            log(f"{pin['target']}: console(s) {', '.join(chatter)} printed, but not a boot (someone typing?): not counted")
         after = self.usb_snapshot()
         changed = [u for u, d in after.items() if u not in before or before[u].get("devnum") != d.get("devnum")]
         if len(spoke) != 1:
@@ -383,7 +388,7 @@ class Prober:
             for cid, c in pending.items():
                 texts[cid] += raw[cid].take().decode("utf-8", "replace") if cid in raw else ""
             spoke = {cid: (texts[cid] if cid in raw else self._read(c, marks[cid])) for cid, c in pending.items()}
-            spoke = {cid: t for cid, t in spoke.items() if t.strip()}
+            spoke = {cid: t for cid, t in spoke.items() if t.strip() and self.socs.looks_like_boot(t)}
             after = self.usb_snapshot()
             changed = [u for u, d in after.items() if u not in registered
                        and (u not in before or before[u].get("devnum") != d.get("devnum"))]
@@ -443,7 +448,9 @@ class Prober:
             "fastboot": {"usb": hit["usb"] or "usb:UNKNOWN"},
             "control": ({"backend": "gpio-relay",
                          "reset": {"pin": hit["pin"]["target"], "mode": "button", "pulse_ms": self.pulse_ms},
-                         "fdl": {"strategy": "strapped" if hit["fdl"] else "button"}} if hit["pin"] else
+                         # A reset that did not land in download mode: the board needs an FDL line nobody has found
+                         # yet, or its strap is the other way; a person says which (`bsp dut set --fdl`).
+                         "fdl": {"strategy": "strapped" if hit["fdl"] else "unset"}} if hit["pin"] else
                         {"backend": "human", "fdl": {"strategy": "strapped"}}),
             "sdks": sdks,
             "identity": ident,
@@ -455,7 +462,8 @@ class Prober:
         if not hit["usb"]:
             warnings.append("no unique USB port re-enumerated: set fastboot.usb by hand (`fastboot devices -l`)")
         if not hit["fdl"] and hit["pin"]:
-            warnings.append("reset did not land in FDL: this board needs an FDL line (control.fdl.pin)")
+            warnings.append("reset did not land in download mode: say how it gets there "
+                            "(`bsp dut set <dut> --fdl strapped`, or `--fdl button --fdl-pin <pin>`)")
         if not hit["fdl"] and not hit["pin"]:
             warnings.append("no download-mode signature seen: check with `bsp dut status` after the first reset")
         return {"spec": spec, "warnings": warnings, "evidence": hit["console_text"]}

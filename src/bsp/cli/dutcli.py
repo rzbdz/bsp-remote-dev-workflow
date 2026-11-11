@@ -726,7 +726,7 @@ def add_parsers(sub) -> None:
     st.add_argument("--usb", help="fastboot selector, e.g. usb:2-1.4")
     st.add_argument("--reset-pin", dest="reset_pin")
     st.add_argument("--pulse-ms", dest="pulse_ms", type=int)
-    st.add_argument("--fdl", choices=["strapped", "button"])
+    st.add_argument("--fdl", choices=["strapped", "button", "unset"])
     st.add_argument("--fdl-pin", dest="fdl_pin")
     st.add_argument("--lease")
 
