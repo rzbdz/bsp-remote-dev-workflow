@@ -205,6 +205,21 @@ def test_soc_profiles_detect_and_layer_merge(tmp_path):
     assert "path" not in m["images"]["uboot"]                        # file not present in any layer
 
 
+def test_common_boot_banners_count_as_a_boot_and_shell_chatter_does_not():
+    from bsp.dut.socs import SocProfiles
+
+    p = SocProfiles(None)
+    for banner in ("NOTICE:  BL2: v2.7(release):v2.7-dirty", "NOTICE:  BL31: Built : 10:15:02, Jan 10 2026",
+                   "INFO:    BL1: RAM 0x4022000 - 0x4023000", "DDR Version 1.16 20230821", "DDR V1.08 20221011",
+                   "U-Boot TPL 2023.07 (Jan 01 2026 - 00:00:00)", "U-Boot SPL board init",
+                   "Trying to boot from MMC1", "Hit any key to stop autoboot:  2", "OpenSBI v1.3",
+                   "U-Boot 2024.01 (Jan 01 2026)", "Starting kernel ..."):
+        assert p.looks_like_boot(banner), banner
+    for chatter in ("~ # lsusb\nBus 001 Device 001: ID 1d6b:0002\n~ # ", "root@board:~# ls /boot\nImage  dtb\n",
+                    "$ echo NOTICE\nNOTICE\n", "root@board:~# cat notes.txt\nddr is fine\n"):
+        assert not p.looks_like_boot(chatter), chatter
+
+
 def test_console_wait_nudges_a_quiet_prompt(tmp_path, monkeypatch):
     """A prompt without a newline only reaches the line-based log after Enter."""
     from bsp.dut import hostio

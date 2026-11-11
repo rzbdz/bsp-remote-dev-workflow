@@ -20,8 +20,10 @@ from typing import Any
 
 
 # What any board prints coming out of reset, profile or not.
-BOOT_BANNERS = (r"U-Boot( SPL)? 20\d\d", r"OpenSBI v?\d", r"Linux version \d", r"Booting Linux", r"Starting kernel",
-                r"\bBoot ?ROM\b", r"\bROM: ", r"\bDDR\b.*\b(init|training)\b")
+BOOT_BANNERS = (r"U-Boot( SPL)? 20\d\d", r"U-Boot (SPL|TPL)\b", r"Trying to boot from \w", r"Hit any key to stop autoboot",
+                r"OpenSBI v?\d", r"\b(NOTICE|INFO|WARNING|ERROR):\s+BL(1|2|31|32|33)\b",   # TF-A's stages
+                r"Linux version \d", r"Booting Linux", r"Starting kernel",
+                r"\bBoot ?ROM\b", r"\bROM: ", r"\bDDR\b.*\b(init|training)\b", r"\bDDR V(ersion )?\d")
 
 
 def _merge(a: dict, b: dict) -> dict:
