@@ -263,6 +263,9 @@ def test_human_backend_detects_the_board_itself_and_times_out():
     with pytest.raises(HardwareTimeout) as e:
         ctl.reset(lines.append, ready=lambda: None)
     assert "bsp dut confirm slot-1" in e.value.hint
+    # The error says a person was needed, so an agent asks one instead of rewiring the host.
+    assert "reset by a person (no relay)" in e.value.message and "nobody did 'reset'" in e.value.message
+    assert "ask a person" in e.value.hint and "rebuild" not in e.value.hint
     with pytest.raises(NotFound):
         att.confirm("slot-1")                        # nothing pending any more
 
@@ -342,6 +345,48 @@ def test_enter_fdl_accepts_a_board_already_in_download_mode(tmp_path):
         BootRunner("b1", Nothing(), fb, con, FakeStore(), download_mode={"console": "download handler"}) \
             .enter_fdl(lines.append, timeout=0.5)
     assert "neither the boot ROM's banner" in e.value.message and "usb:2-1.2" in e.value.message
+
+
+def test_a_person_gets_the_whole_window_to_put_a_board_in_download_mode(tmp_path, monkeypatch):
+    """A person confirms, then presses a moment later: the board is waited for past a relay's 30 seconds, within the
+    person's window; if it never shows, the error says a person confirmed and the board did not follow."""
+    import bsp.dut.boot as boot_mod
+
+    con = FakeConsole(tmp_path)
+    fb = FakeFastboot(con)
+    fb.product = None
+    clock = [1000.0]
+    monkeypatch.setattr(boot_mod.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(boot_mod.time, "sleep", lambda s: clock.__setitem__(0, clock[0] + s))
+
+    class Person:
+        needs_human = True
+        def human_timeout(self):
+            return 300.0
+        def enter_fdl(self, log, ready=None):
+            clock[0] += 10                         # confirmed after 10 s, before the board is there
+
+    lines = []
+    runner = BootRunner("b1", Person(), fb, con, FakeStore(), download_mode={"console": "download handler", "fastboot": "DFU"})
+    real_seen = runner.download_evidence
+
+    def late(mark):
+        check = real_seen(mark)
+        def seen():
+            if clock[0] >= 1100 and fb.product is None:     # pressed 100 s in: a relay's 30 s would have failed
+                fb.product = "DFU download"
+            return check()
+        return seen
+    runner.download_evidence = late
+    runner.enter_fdl(lines.append, timeout=30)
+    assert lines[-1].startswith("board in download mode")
+
+    fb.product = None
+    runner.download_evidence = real_seen                    # never shows: the person's window runs out
+    with pytest.raises(HardwareTimeout) as e:
+        runner.enter_fdl(lines.append, timeout=30)
+    assert "a person confirmed b1 is in download mode" in e.value.message
+    assert "reset by a person (no relay)" in e.value.hint and "rebuild" not in e.value.hint
 
 
 def test_flash_hook_skips_a_medium_the_board_does_not_have(tmp_path):

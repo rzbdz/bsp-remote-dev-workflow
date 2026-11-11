@@ -24,6 +24,12 @@ from ..core.registry import Registry
 from .catalog import DutSpec
 
 Log = Callable[[str], None]
+# How long a board reset by a person waits for them: long enough to see the request and walk to the board.
+HUMAN_TIMEOUT_S = 300.0
+
+
+def _span(seconds: float) -> str:
+    return f"{seconds / 60:g} minutes" if seconds >= 120 else f"{seconds:g}s"
 # returns a short description of the evidence once the requested state is visible, else None
 Ready = Callable[[], "str | None"]
 
@@ -165,14 +171,21 @@ class HumanControl(ControlBackend):
     """A person resets the board. bsp asks, then waits for `bsp dut confirm <dut>` or for
     the board itself to show the requested state, whichever comes first.
 
-    control.human (optional): {timeout_s: 900, reset: "<how to reset>", fdl: "<how to enter download mode>"}
+    The whole request has one window (`human_timeout()`, 5 minutes by default): a person has to see the request,
+    walk to the board and press it, so a relay's 30 seconds would fail them. Errors say a person was needed, so an
+    agent reading them knows to ask one rather than to rewire the host.
+
+    control.human (optional): {timeout_s: 300, reset: "<how to reset>", fdl: "<how to enter download mode>"}
     """
 
     needs_human = True
 
+    def human_timeout(self) -> float:
+        return float((self.cfg.get("human") or {}).get("timeout_s", HUMAN_TIMEOUT_S))
+
     def _ask(self, action: str, message: str, log: Log, ready: Ready | None) -> None:
         att: Attention = self._services("dut_attention")
-        timeout = float((self.cfg.get("human") or {}).get("timeout_s", 900))
+        timeout = self.human_timeout()
         ev = att.request(self.dut.id, action, message)
         log(f"ACTION NEEDED: {message}")
         log(f"waiting for `bsp dut confirm {self.dut.id}`"
@@ -188,9 +201,12 @@ class HumanControl(ControlBackend):
                     log(f"{action}: detected {seen}")
                     return
                 if time.monotonic() > deadline:
-                    raise HardwareTimeout(f"{self.dut.id}: nobody confirmed '{action}' within {timeout:g}s",
-                                          hint=f"do it on the board, then `bsp dut confirm {self.dut.id}`; "
-                                               "or raise control.human.timeout_s")
+                    raise HardwareTimeout(
+                        f"{self.dut.id} is reset by a person (no relay), and nobody did '{action}' within "
+                        f"{_span(timeout)}: {message}",
+                        hint=f"ask a person at the board to do it (it was asked for on the board's page), then "
+                             f"`bsp dut confirm {self.dut.id}`; or retry when someone is there. "
+                             f"control.human.timeout_s sets the wait")
         finally:
             att.clear(self.dut.id, ev)
 

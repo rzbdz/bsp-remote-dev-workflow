@@ -64,12 +64,31 @@ class BootRunner:
     def enter_fdl(self, log: Log, timeout: float = 30) -> None:
         mark = self.console.mark()
         seen = self.download_evidence(mark)
+        started = time.monotonic()
         self.control.enter_fdl(log, seen)
         # Either sign will do: the boot ROM's banner on the console, or its download device on USB. A board that was
         # already in download mode prints no new banner, so waiting for the console alone failed on it.
-        deadline = time.monotonic() + timeout
+        # A relay switches at once, so its board shows download mode within `timeout`. A person may confirm before
+        # the board is there (or press it a moment later): the board gets the rest of the person's window, and at
+        # least a minute after they confirmed.
+        human = getattr(self.control, "needs_human", False)
+        if human:
+            confirmed = time.monotonic()
+            deadline = max(started + self.control.human_timeout(), confirmed + 60)
+        else:
+            deadline = time.monotonic() + timeout
         while not seen():
             if time.monotonic() > deadline:
+                if human:
+                    raise HardwareTimeout(
+                        f"a person confirmed {self.dut_id} is in download mode, but it did not show it within "
+                        f"{deadline - confirmed:.0f}s of that: neither the boot ROM's banner on the console"
+                        + (f" (/{self.download_mode['console']}/)" if self.download_mode.get("console") else "")
+                        + f" nor its download device on {self.fb.usb}",
+                        hint="this board is reset by a person (no relay). It may have booted normally (download "
+                             "button not held), or its download cable may be out; the console tail shows which. "
+                             "Ask the person to try again, then retry",
+                        details={"console_tail": "\n".join(self.console.tail(15))})
                 raise HardwareTimeout(
                     f"no sign of download mode within {timeout:g}s: neither the boot ROM's banner on the console"
                     + (f" (/{self.download_mode['console']}/)" if self.download_mode.get("console") else "")
