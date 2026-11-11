@@ -138,6 +138,21 @@ class DutModule(Module):
             self._event("error", error=e.to_dict(), what="catalog reload")
             log.warning("catalog reload failed, keeping the previous one: %s", e.message)
 
+    def reload_site(self) -> dict[str, Any]:
+        """Read the site again after it changed on disk (a tool that manages it shipped a new copy): its SDK catalog,
+        SoC profiles and hooks; the sdk module follows (`site.updated`). A catalog that does not load is an error, and
+        the running one stays."""
+        from ..core.site import layered
+
+        roots = layered("sdk", self._site)
+        sdks = SdkCatalog(roots + ([self._catalog_layer] if self._catalog_layer.is_dir() else []))
+        self._load_socs()
+        self._sdk_roots, self.sdks = roots, sdks
+        self.ctx.bus.publish("site.updated", site=str(self._site))
+        result = {"site": str(self._site), "sdks": sorted(sdks.instances.names()), "socs": sorted(self.socs.profiles)}
+        self._event("catalog", sdks=len(result["sdks"]), socs=result["socs"])
+        return result
+
     def catalog_rev(self) -> int:
         from ..registry.catalog import layer_rev
 

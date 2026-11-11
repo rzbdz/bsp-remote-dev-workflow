@@ -150,7 +150,7 @@ def _client_parser() -> argparse.ArgumentParser:
     sub.add_parser("remote", help="manage known bsp hosts")
     sub.add_parser("watch", help="stream live events from the host(s)")
     sub.add_parser("tools", help="AI tool schemas of the host commands (anthropic format)")
-    for g in ("gpio", "relay", "button", "board", "job", "events", "status"):
+    for g in ("gpio", "relay", "button", "board", "job", "events", "status", "site"):
         sub.add_parser(g, help="host command group (passed through, see `bsp -r HOST <group> --help`)")
     return p
 

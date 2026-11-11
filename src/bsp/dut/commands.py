@@ -192,6 +192,12 @@ def build_commands(mod: "DutModule") -> list[Command]:
                               if "job" in r else f"{r['host']} would ")
             + f"forget {', '.join(r['forget_duts']) or 'no DUTs'}"
             + (f", keep {', '.join(r['keep_duts'])} (site catalog)" if r["keep_duts"] else "")),
+        cmd("site.reload", "Read the site again (SDK catalog, SoC profiles, hooks) after it changed on disk",
+            mod.reload_site,
+            render=lambda r: f"{r['site']}: {len(r['sdks'])} sdks ({', '.join(r['sdks']) or 'none'}), "
+                             f"socs {', '.join(r['socs']) or 'none'}",
+            description="For tools that ship the site to this host: boards, leases and jobs are untouched. A catalog "
+                        "that does not load is reported and the running one is kept."),
     ]
     # Any DUT can be named by its slot: `s3`, or `<host>/s3`.
     for c in cmds:

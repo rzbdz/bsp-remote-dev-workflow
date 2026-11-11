@@ -36,16 +36,22 @@ class SdkModule(Module):
         super().__init__(ctx, config)
         from ..core.site import layered
 
-        self._roots = layered("sdk", (ctx.config_dir / config.get("site", "..")).resolve())
+        self._site = (ctx.config_dir / config.get("site", "..")).resolve()
+        self._roots = layered("sdk", self._site)
         self._layer = ctx.state_dir / "catalog"            # the registry's catalog, when this host follows one
         self.catalog = self._load()
         ctx.bus.on("catalog.updated", lambda ev: self._reload())
+        ctx.bus.on("site.updated", lambda ev: self._reload(reread_site=True))
 
     def _load(self) -> SdkCatalog:
         return SdkCatalog(self._roots + ([self._layer] if self._layer.is_dir() else []))
 
-    def _reload(self) -> None:
+    def _reload(self, reread_site: bool = False) -> None:
         try:
+            if reread_site:                                 # the site's sdk/ may be new since start
+                from ..core.site import layered
+
+                self._roots = layered("sdk", self._site)
             self.catalog = self._load()
         except Exception:  # noqa: BLE001 - keep the catalog that loads
             pass
