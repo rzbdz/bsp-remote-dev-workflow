@@ -116,7 +116,8 @@ def sdk_show(args) -> tuple[Any, str]:
     i = catalog().get(args.sdk)
     out = {**i.summary(), "dev_projects": i.dev_projects, "artifacts": i.artifacts(),
            "shares_workspace_with": [x for x in sharing(catalog(), i.workspace.id) if x != i.id],
-           "boot_notes": {m: b.notes for m, b in i.boot.items()}}
+           "boot_notes": {m: b.notes for m, b in i.boot.items()},
+           "breakers": {m: i.breakers(m) for m in i.boot}}
     text = "\n".join([f"{i.id}: {out['description']}",
                       f"  server     : {i.server.id} ({i.server.ssh})  path {i.path}",
                       f"  soc        : {i.soc}   workspace: {i.workspace.id}"
@@ -125,6 +126,7 @@ def sdk_show(args) -> tuple[Any, str]:
                       f"  components : {', '.join(out['components'])}",
                       f"  dev repos  : {', '.join(i.dev_projects)}",
                       f"  boot       : " + ", ".join(f"{m}={s}" for m, s in out['boot'].items()),
+                      *[f"  break      : {m}: {', '.join(b)}" for m, b in out["breakers"].items() if b],
                       "  artifacts  :", *[f"    {r:<11} {p}" for r, p in out["artifacts"].items()]])
     return out, text
 

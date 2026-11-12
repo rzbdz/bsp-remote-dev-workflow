@@ -109,3 +109,30 @@ def test_a_variant_swaps_steps_with_only_if_and_unless():
         assert default == ["enter-fdl", "stage", "fastboot-way", "reset"]
         assert other == ["enter-fdl", "other-tool", "reset"]
         assert all("only_if" not in s and "unless" not in s for s in sdk.boot_plan("download", "other-flasher")["steps"])
+
+
+def test_a_recipe_can_stop_at_a_break_point():
+    """`breaker: NAME` on a step: `--break NAME` ends the run once that step is done, for debugging it alone."""
+    import pathlib, tempfile, yaml
+
+    with tempfile.TemporaryDirectory() as d:
+        root = pathlib.Path(d)
+        for part in ("families", "servers", "instances"): (root / part).mkdir()
+        (root / "families" / "f.yaml").write_text(yaml.safe_dump({"id": "f", "build": {"runner": "make", "targets": {"all": "all"}},
+                                                                   "artifacts": {"dir": "out", "roles": {"fsbl": "FSBL.bin"}}}))
+        (root / "servers" / "s.yaml").write_text(yaml.safe_dump({"id": "s", "host": "h.example.test", "user": "u"}))
+        (root / "instances" / "k.yaml").write_text(yaml.safe_dump({"id": "k", "family": "f", "server": "s", "path": "/w", "boot": {
+            "load": {"status": "ready", "steps": [{"do": "enter-fdl"}, {"do": "stage", "artifact": "fsbl"},
+                                                   {"do": "wait", "serial": "U-Boot", "breaker": "uboot"},
+                                                   {"do": "stage", "artifact": "fsbl"}, {"do": "continue"}]},
+            "download": {"status": "todo", "steps": []}}}))
+        sdk = SdkCatalog(root).get("k")
+        assert sdk.breakers("load") == ["uboot"] and sdk.breakers("download") == []
+        full = sdk.boot_plan("load")
+        early = sdk.boot_plan("load", brk="uboot")
+        assert len(early["steps"]) == 3 and early["steps"][-1]["do"] == "wait"
+        assert len(full["steps"]) == 5                                           # the default run is unchanged
+        assert all("breaker" not in s for s in full["steps"])
+        with pytest.raises(InvalidRequest) as e:
+            sdk.boot_plan("load", brk="kernel")
+        assert "break points: uboot" in e.value.hint

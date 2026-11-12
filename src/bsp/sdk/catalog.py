@@ -195,7 +195,11 @@ class Instance:
         return {r: f"{self.artifact_dir()}/{f.format(plat=self.raw.get('plat', ''))}" for r, f in roles.items()}
 
     # ------------------------------------------------------------- boot --
-    def boot_plan(self, method: str, variant: str | None = None) -> dict[str, Any]:
+    def breakers(self, method: str) -> list[str]:
+        """Where a recipe can stop early (`breaker: NAME` on a step), in order: for debugging that stage on its own."""
+        return [str(s["breaker"]) for s in self.boot[method].steps if s.get("breaker")]
+
+    def boot_plan(self, method: str, variant: str | None = None, brk: str | None = None) -> dict[str, Any]:
         if method not in BOOT_METHODS:
             raise InvalidRequest(f"boot method must be one of {list(BOOT_METHODS)}, got {method!r}",
                                  hint="load = fastboot RAM boot; download = flash to media then cold boot")
@@ -209,6 +213,9 @@ class Instance:
         if variant and variant not in bm.variants:
             raise InvalidRequest(f"{self.id}/{method}: unknown variant {variant!r}",
                                  hint=f"variants: {', '.join(bm.variants) or '(none)'}")
+        if brk and brk not in self.breakers(method):
+            raise InvalidRequest(f"{self.id}/{method}: no break point {brk!r}",
+                                 hint=f"break points: {', '.join(self.breakers(method)) or '(none — put `breaker: NAME` on a step)'}")
         arts = self.artifacts()
         steps = []
         for s in bm.steps:
@@ -225,7 +232,13 @@ class Instance:
             if "artifact" in s:
                 s["file"] = arts.get(s["artifact"])
             steps.append(s)
-        return {"sdk": self.id, "method": method, "variant": variant, "steps": steps}
+            # A break point: the run stops once this step is done (debug U-Boot alone, say).
+            if brk and s.get("breaker") == brk:
+                break
+            s.pop("breaker", None)
+        for s in steps:
+            s.pop("breaker", None)
+        return {"sdk": self.id, "method": method, "variant": variant, "break": brk, "steps": steps}
 
     def summary(self) -> dict[str, Any]:
         return {

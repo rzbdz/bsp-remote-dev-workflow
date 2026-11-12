@@ -370,7 +370,7 @@ class DutModule(Module):
         self.board(dut)
         return self.attention.confirm(dut, note or "")
 
-    def boot(self, dut: str, sdk: str, method: str, variant: str | None, lease: str | None) -> dict[str, Any]:
+    def boot(self, dut: str, sdk: str, method: str, variant: str | None, lease: str | None, brk: str | None = None) -> dict[str, Any]:
         b = self.board(dut)
         self.leases.check(dut, lease)
         self._guard_busy(dut)
@@ -382,7 +382,7 @@ class DutModule(Module):
             raise InvalidRequest(f"{dut} ({b.spec.board}) is not declared to run sdk {sdk}",
                                  hint=f"supported: {', '.join(self.effective_sdks(b.spec))}; "
                                       f"change with `bsp dut set {dut} --sdks ...` (empty = all SDKs of its SoC)")
-        inst.boot_plan(method, variant)       # validate first: todo methods fail here with their notes
+        inst.boot_plan(method, variant, brk)  # validate first: todo methods fail here with their notes
         runner = b.runner(self)
         rev = self.catalog_rev()
 
@@ -394,7 +394,7 @@ class DutModule(Module):
             for x in overridden:
                 log(f"NOTE: {x['file']} on this host differs from the registry's {sdk} and is NOT used; "
                     f"publish it with `bsp catalog put {sdk} -f <file>` if it is the newer one")
-            return runner.run(inst, method, variant, log)
+            return runner.run(inst, method, variant, log, brk)
 
         job = self._start_job(dut, f"boot {sdk} [{method}]", body,
                               kind="boot", sdk=sdk, method=method)

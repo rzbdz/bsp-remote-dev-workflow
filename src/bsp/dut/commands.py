@@ -55,7 +55,8 @@ def build_commands(mod: "DutModule") -> list[Command]:
             mod.boot,
             [DUT, Param("sdk", help="sdk instance (bsp sdk list)", positional=False),
              Param("method", help="load | download", required=False, default="load", choices=list(BOOT_METHODS)),
-             Param("variant", help="e.g. uboot-only", required=False), LEASE],
+             Param("variant", help="e.g. uboot-only", required=False),
+             Param("brk", help="stop at a break point of the recipe (debug U-Boot alone, say): bsp sdk show lists them", required=False, positional=False), LEASE],
             render=lambda r: f"job {r['job']}: {r['dut']} boot {r['sdk']} [{r['method']}]",
             description="Pulls the SDK's artifacts from its build server into the host cache, then runs the "
                         "recipe (enter-fdl, stage, continue, waits on serial + fastboot). Background job: the "

@@ -186,7 +186,7 @@ def dut_cmd(fleet: Fleet, args, book: LeaseBook) -> tuple[Any, str]:
             print(f"{dut} @ {h.id}: boot {len(arts)} file(s) job {r['job']}", file=out, flush=True)
         else:
             r = _ok(h, h.call("dut_boot", {"dut": dut, "sdk": args.sdk, "method": args.method,
-                                            "variant": args.variant, "lease": _lease(args, book, dut)}))
+                                            "variant": args.variant, "brk": args.brk, "lease": _lease(args, book, dut)}))
             print(f"{dut} @ {h.id}: boot {args.sdk} [{args.method}] job {r['job']}", file=out, flush=True)
         if args.no_wait:
             return r, f"follow with: bsp job get {r['job']} -r {h.id} --wait 30"
@@ -764,6 +764,8 @@ def add_parsers(sub) -> None:
                    help="--files: then poll this long for the download port (default 20)")
     b.add_argument("--method", default="load", choices=["load", "download"])
     b.add_argument("--variant", help="e.g. uboot-only")
+    b.add_argument("--break", dest="brk", metavar="NAME",
+                   help="stop once the recipe reaches this break point (debug U-Boot alone, say): bsp sdk show lists them")
     b.add_argument("--no-wait", action="store_true")
     b.add_argument("--timeout", type=float, default=900)
     b.add_argument("--lease")

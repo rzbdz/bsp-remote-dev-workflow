@@ -539,7 +539,7 @@ def test_an_sdk_recipes_hook_step_gets_the_boards_soc_images(tmp_path):
     import types
 
     sdk = types.SimpleNamespace(id="pkg-sdk", server=types.SimpleNamespace(ssh="u@h"), artifacts=lambda: {"flash-zip": "/out/p.zip"},
-                                boot_plan=lambda method, variant: {"steps": [{"do": "hook", "kind": "flash", "name": "tool-a",
+                                boot_plan=lambda method, variant, brk=None: {"steps": [{"do": "hook", "kind": "flash", "name": "tool-a",
                                                                                "artifacts": ["flash-zip"]}]})
     seen = {}
 

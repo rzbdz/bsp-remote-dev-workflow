@@ -258,11 +258,12 @@ class BootRunner:
                 "elapsed_s": round(time.monotonic() - t0, 1)}
 
     # ------------------------------------------------------------- run --
-    def run(self, sdk: Instance, method: str, variant: str | None, log: Log) -> dict[str, Any]:
-        plan = sdk.boot_plan(method, variant)
+    def run(self, sdk: Instance, method: str, variant: str | None, log: Log, brk: str | None = None) -> dict[str, Any]:
+        plan = sdk.boot_plan(method, variant, brk)
         roles = sorted({s["artifact"] for s in plan["steps"] if "artifact" in s}
                        | {r for s in plan["steps"] for r in s.get("artifacts", [])})
-        log(f"boot {self.dut_id} with {sdk.id} [{method}{'/' + variant if variant else ''}]: {len(plan['steps'])} steps")
+        log(f"boot {self.dut_id} with {sdk.id} [{method}{'/' + variant if variant else ''}]: {len(plan['steps'])} steps"
+            + (f", stopping at {brk}" if brk else ""))
         arts = self.store.pull(sdk.server.ssh, {r: sdk.artifacts()[r] for r in roles}, log)
         t0 = time.monotonic()
         # The board's SoC images too, so `stage image:` and hook steps (a flasher shipped as an image) find theirs.
