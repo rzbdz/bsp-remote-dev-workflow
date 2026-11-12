@@ -284,3 +284,30 @@ def test_cli_flash_sends_a_directory_and_prints_progress(tmp_path, monkeypatch, 
     finally:
         server.should_exit = True
         t.join(5)
+
+
+def test_a_running_job_can_be_cancelled(host):
+    """`dut cancel` asks the running job to stop: it ends before its next step, with status cancelled."""
+    import time
+
+    from bsp.core.jobs import JobManager
+    from bsp.core.events import EventBus
+
+    bus = EventBus()
+    jobs = JobManager(bus)
+    step = {"n": 0}
+
+    def body(log):
+        for _ in range(100):
+            log.check()
+            step["n"] += 1
+            time.sleep(0.02)
+
+    job = jobs.start("boot", "d1: boot", body, dut="d1")
+    for _ in range(100):
+        if step["n"] >= 2:
+            break
+        time.sleep(0.02)
+    job.cancel()
+    jobs.wait(job.id, 5)
+    assert job.status == "cancelled" and step["n"] < 100

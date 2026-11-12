@@ -169,6 +169,9 @@ def dut_cmd(fleet: Fleet, args, book: LeaseBook) -> tuple[Any, str]:
             if entry:
                 book.put(f"dut:{new}", entry, 3600, host=h.id)
         return v, text
+    if c == "cancel":
+        r = _ok(h, h.call("dut_cancel", {"dut": dut, "lease": _lease(args, book, dut)}))
+        return r, f"{dut}: cancelling {', '.join(r['cancelled'])}; it ends before its next step"
     if c == "confirm":
         r = _ok(h, h.call("dut_confirm", {"dut": dut, "note": " ".join(args.note or [])}))
         return r, f"{dut}: confirmed '{r['confirmed']}' after {r['waited_s']}s; the waiting job continues"
@@ -735,6 +738,9 @@ def add_parsers(sub) -> None:
     rs.add_argument("--lease")
     rs.add_argument("--no-wait", action="store_true", help="human backend: return the job id instead of waiting")
     rs.add_argument("--timeout", type=float, default=1800, help="how long to follow a waiting reset job (s)")
+    cc = ds.add_parser("cancel", help="stop the job running on a DUT (a boot or a flash): it ends before its next step")
+    cc.add_argument("dut")
+    cc.add_argument("--lease")
     cf = ds.add_parser("confirm", help="tell a waiting reset/boot that you did what it asked (human backend)")
     cf.add_argument("dut")
     cf.add_argument("note", nargs="*", help="optional note for the log, e.g. 'pressed reset'")

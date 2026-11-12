@@ -61,6 +61,9 @@ def build_commands(mod: "DutModule") -> list[Command]:
             description="Pulls the SDK's artifacts from its build server into the host cache, then runs the "
                         "recipe (enter-fdl, stage, continue, waits on serial + fastboot). Background job: the "
                         "CLI follows it and exits non-zero if it fails."),
+        cmd("dut.cancel", "Stop the job running on a DUT (a boot or a flash): it ends before its next step",
+            mod.cancel, [DUT, LEASE],
+            render=lambda r: f"{r['dut']}: cancelling {', '.join(r['cancelled'])}"),
         cmd("dut.console", "Run one shell command on the DUT's serial console, return its output",
             mod.console,
             [DUT, Param("cmd", help="command line, e.g. 'dmesg | grep foo'"),

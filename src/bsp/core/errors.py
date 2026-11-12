@@ -39,6 +39,12 @@ class Forbidden(BspError):
     code = "forbidden"
 
 
+class Cancelled(BspError):
+    """A job stopped on request (the board is fine; the run was let go)."""
+    status = 409
+    code = "cancelled"
+
+
 class Conflict(BspError):
     status = 409
     code = "conflict"

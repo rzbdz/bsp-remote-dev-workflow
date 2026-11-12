@@ -401,6 +401,18 @@ class DutModule(Module):
         self._event("boot", dut=dut, sdk=sdk, method=method, job=job.id)
         return {"job": job.id, "dut": dut, "sdk": sdk, "method": method, "host": self.ctx.host_id}
 
+    def cancel(self, dut: str, lease: str | None) -> dict[str, Any]:
+        """Stop the job running on a DUT (a boot or a flash): it ends before its next step, `cancelled`."""
+        b = self.board(dut)
+        self.leases.check(dut, lease)
+        running = [j for j in self.ctx.jobs.list() if j.status == "running" and j.meta.get("dut") == b.spec.id]
+        if not running:
+            raise InvalidRequest(f"{dut}: no job running")
+        for job in running:
+            job.cancel()
+        self._event("cancel", dut=dut, jobs=[j.id for j in running])
+        return {"dut": dut, "cancelled": [j.id for j in running]}
+
     def console(self, dut: str, cmd: str, expect: str | None, timeout: float, lease: str | None) -> dict[str, Any]:
         b = self.board(dut)
         self.leases.check(dut, lease)

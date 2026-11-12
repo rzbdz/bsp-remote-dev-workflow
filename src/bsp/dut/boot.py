@@ -117,6 +117,9 @@ class BootRunner:
         strapped = self.strapped()
         media = self.media if self.media is not None and strapped else None
         for i, step in enumerate(steps, 1):
+            check = getattr(log, "check", None)
+            if check is not None:
+                check()                                   # a cancelled job ends before its next step
             kind = step["do"]
             label = f"{what} {i}/{len(steps)} {kind}"
             # Steps that need the board to boot its own media: on a strapped board they run only when it has a

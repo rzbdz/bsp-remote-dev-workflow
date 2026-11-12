@@ -11,7 +11,7 @@ import traceback
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from .errors import NotFound, BspError
+from .errors import Cancelled, NotFound, BspError
 from .events import EventBus
 
 
@@ -20,7 +20,7 @@ class Job:
     id: str
     kind: str
     title: str
-    status: str = "running"            # running | succeeded | failed
+    status: str = "running"            # running | succeeded | failed | cancelled
     created: float = field(default_factory=time.time)
     finished: float | None = None
     lines: list[str] = field(default_factory=list)
@@ -28,6 +28,11 @@ class Job:
     error: dict[str, Any] | None = None
     meta: dict[str, Any] = field(default_factory=dict)
     progress: int | None = None        # percent done, when the job's body reports it
+    cancel_event: threading.Event = field(default_factory=threading.Event)
+
+    def cancel(self) -> None:
+        """Ask the job to stop: its body checks at each step and ends with `status: cancelled`."""
+        self.cancel_event.set()
 
     def view(self, since: int = 0) -> dict[str, Any]:
         return {
@@ -44,6 +49,12 @@ class JobLog:
 
     def __init__(self, job: Job, bus: EventBus):
         self._job, self._bus = job, bus
+        self.stop = job.cancel_event
+
+    def check(self) -> None:
+        """Called between steps: a cancelled job ends here, saying so."""
+        if self._job.cancel_event.is_set():
+            raise Cancelled(f"{self._job.title} cancelled")
 
     def __call__(self, msg: str) -> None:
         line = f"[{time.time() - self._job.created:6.1f}s] {msg}"
@@ -79,12 +90,16 @@ class JobManager:
             log = JobLog(job, self.bus)
             try:
                 job.result = body(log)
-                job.status = "succeeded"
+                job.status = "cancelled" if job.cancel_event.is_set() else "succeeded"
                 if job.progress is not None:
                     job.progress = 100
             except BspError as e:
-                job.error, job.status = e.to_dict(), "failed"
-                log(f"FAILED: {e.message}" + (f" (hint: {e.hint})" if e.hint else ""))
+                if isinstance(e, Cancelled):
+                    job.status = "cancelled"
+                    log(f"cancelled: {e.message}")
+                else:
+                    job.error, job.status = e.to_dict(), "failed"
+                    log(f"FAILED: {e.message}" + (f" (hint: {e.hint})" if e.hint else ""))
             except Exception as e:  # pragma: no cover - defensive
                 job.error = {"code": "internal_error", "message": str(e), "details": traceback.format_exc()[-2000:]}
                 job.status = "failed"
