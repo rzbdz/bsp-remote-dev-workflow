@@ -532,3 +532,26 @@ def test_a_hook_that_runs_too_long_gets_sigterm_first(tmp_path, monkeypatch):
         HookRunner().run("flash", "stuck", {}, timeout=1)
     assert "timed out after 1s" in e.value.message and "more time" in e.value.hint
     assert mark.exists() and e.value.details["stdout"] == ["working"]
+
+
+def test_an_sdk_recipes_hook_step_gets_the_boards_soc_images(tmp_path):
+    """A flasher shipped as a SoC image (fetched by `bsp images sync`) is handed to the recipe's hook step."""
+    import types
+
+    sdk = types.SimpleNamespace(id="pkg-sdk", server=types.SimpleNamespace(ssh="u@h"), artifacts=lambda: {"flash-zip": "/out/p.zip"},
+                                boot_plan=lambda method, variant: {"steps": [{"do": "hook", "kind": "flash", "name": "tool-a",
+                                                                               "artifacts": ["flash-zip"]}]})
+    seen = {}
+
+    class Hooks:
+        def run(self, kind, name, req, timeout=0, log=None, progress=None):
+            seen.update(req)
+            return types.SimpleNamespace(data={"flashed": []}, lines=[], code=0)
+
+    con = FakeConsole(tmp_path)
+    media = types.SimpleNamespace(profile={"images": {"tool-a-amd64": {"file": "tool", "path": "/site/.blobs/x/tool"},
+                                                      "not-fetched": {"file": "other"}}})
+    BootRunner("b1", FakeControl(con), FakeFastboot(con), con, FakeStore(), hooks=Hooks(), media=media) \
+        .run(sdk, "download", None, lambda m: None)
+    assert seen["images"] == {"tool-a-amd64": "/site/.blobs/x/tool"}
+    assert seen["artifacts"] == {"flash-zip": "/out/p.zip"}

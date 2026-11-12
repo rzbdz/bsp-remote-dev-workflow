@@ -265,7 +265,9 @@ class BootRunner:
         log(f"boot {self.dut_id} with {sdk.id} [{method}{'/' + variant if variant else ''}]: {len(plan['steps'])} steps")
         arts = self.store.pull(sdk.server.ssh, {r: sdk.artifacts()[r] for r in roles}, log)
         t0 = time.monotonic()
-        self.run_steps(plan["steps"], log, arts=arts)
+        # The board's SoC images too, so `stage image:` and hook steps (a flasher shipped as an image) find theirs.
+        images = (self.media.profile.get("images") or {}) if self.media is not None else {}
+        self.run_steps(plan["steps"], log, arts=arts, images=images)
         log(f"done in {time.monotonic() - t0:.1f}s")
         return {"dut": self.dut_id, "sdk": sdk.id, "method": method, "variant": variant,
                 "artifacts": {r: {k: a[k] for k in ("remote", "sha256", "size", "age_s")} for r, a in arts.items()},
