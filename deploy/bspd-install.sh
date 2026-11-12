@@ -116,6 +116,7 @@ Type=simple
 WorkingDirectory=$PREFIX/current/app
 ExecStart=$PREFIX/current/venv/bin/bsp-hostd --config $CONF
 Environment=PYTHONUNBUFFERED=1
+Environment=PATH=$PREFIX/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=BSP_SITE=$SITE
 EnvironmentFile=-/etc/bsp/hostd.env
 Restart=always
