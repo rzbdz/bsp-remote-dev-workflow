@@ -37,6 +37,8 @@ All notable changes to this project are documented here. The format follows
   and says why a slot found nothing. `bsp probe --yes` registers each board as it is found.
 - Interactive consoles (`bsp dut console`, console logins) leave with Ctrl-A Ctrl-X, as in picocom;
   Ctrl+] and Ctrl-C now go to the board (serial-mux's smtty reads picocom's keys).
+- `smtty --send --wait` timeouts keep the command's output and exit code as scripts expect;
+  `--advice` (with `--tail-lines`) adds the console's last lines and how to go on, for an AI driving it.
 
 ### Fixed
 - Probe no longer says a SoC has no identify section when it skipped identify because no download
