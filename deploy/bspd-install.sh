@@ -13,11 +13,11 @@
 # watches the install (boardlab's page) sees how far it is.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-ID="" PORT=8765 BIND=127.0.0.1 TOKEN="" BOARD=auto RELAY=auto SITE=/etc/bsp/site PREFIX=/opt/bspd UNINSTALL="" PURGE=""
+ID="" PORT=8765 BIND=127.0.0.1 TOKEN="" BOARD=auto RELAY=auto SITE=/etc/bsp/site PREFIX=/opt/bspd CA="" UNINSTALL="" PURGE=""
 while [[ $# -gt 0 ]]; do
   case $1 in
     --id) ID=$2; shift 2 ;; --port) PORT=$2; shift 2 ;; --bind) BIND=$2; shift 2 ;; --token) TOKEN=$2; shift 2 ;;
-    --board) BOARD=$2; shift 2 ;; --relay) RELAY=$2; shift 2 ;; --site) SITE=$2; shift 2 ;; --prefix) PREFIX=$2; shift 2 ;;
+    --board) BOARD=$2; shift 2 ;; --relay) RELAY=$2; shift 2 ;; --site) SITE=$2; shift 2 ;; --prefix) PREFIX=$2; shift 2 ;; --ca) CA=$2; shift 2 ;;
     --uninstall) UNINSTALL=1; shift ;; --purge) PURGE=1; shift ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
@@ -122,6 +122,18 @@ mv -f "$CONF.new" "$CONF"
 if [[ -n $TOKEN ]]; then umask 077; printf 'BSP_TOKEN=%s\n' "$TOKEN" > /etc/bsp/hostd.env; fi
 [[ -f /etc/bsp/hostd.env ]] || { umask 077; : > /etc/bsp/hostd.env; }
 chmod 600 /etc/bsp/hostd.env
+# A certificate this host must trust (the network's own CA, say): installed beside the system's before anything is
+# downloaded from hosts it signs.
+if [[ -n $CA ]]; then
+  name="boardlab-extra-$(basename "$CA" .crt).crt"
+  if [[ $CA == http://* || $CA == https://* ]]; then
+    curl -fsSL --connect-timeout 15 "$CA" -o "/usr/local/share/ca-certificates/$name" || { echo "!! could not fetch the certificate $CA" >&2; exit 1; }
+  else
+    cp "$CA" "/usr/local/share/ca-certificates/$name"
+  fi
+  update-ca-certificates >/dev/null
+  echo "--> certificate: $(basename "$CA") is trusted here"
+fi
 command -v fastboot >/dev/null || echo "WARNING: fastboot is not installed: boards cannot be loaded or flashed (apt install fastboot)" >&2
 
 echo "--> [5/6] starting bsp-hostd"

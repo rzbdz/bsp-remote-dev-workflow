@@ -76,3 +76,10 @@ def test_bspd_install_numbers_its_stages():
     assert any("Python environment" in what for _, _, what in steps) and steps[-1][2] == "checking health"
     assert 'echo "BSPD-READY $ID $PORT $VERSION"' in script
     assert "--progress-bar off" in script and "install -q" not in script                # pip says what it does
+
+
+def test_a_certificate_given_with_ca_is_installed_before_downloads():
+    """`--ca <file|url>`: installed beside the system's CAs, so downloads from hosts it signs verify."""
+    script = (Path(__file__).resolve().parents[1] / "deploy" / "bspd-install.sh").read_text()
+    assert "--ca) CA=$2" in script
+    assert "update-ca-certificates" in script and "boardlab-extra-" in script
