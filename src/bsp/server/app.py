@@ -25,8 +25,7 @@ from fastapi import Body, FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field, create_model
 
 from .. import __version__
@@ -274,7 +273,14 @@ def create_app(config: HostConfig) -> FastAPI:
         if r is not None:
             app.include_router(r)
 
-    app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
+    # Served by a route of its own: a mounted StaticFiles takes the proxy's `root_path` off the path again and would
+    # look the file up in the wrong place under a prefix.
+    @app.get("/static/{name:path}", include_in_schema=False)
+    async def static_file(name: str):
+        target = (WEB_DIR / name).resolve()
+        if WEB_DIR.resolve() not in target.parents or not target.is_file():
+            raise StarletteHTTPException(404)
+        return FileResponse(target, headers={"Cache-Control": "no-cache"})
 
     # cache-busting: asset URLs carry a hash of the web files, so a redeploy is picked up without Ctrl+F5
     web_version = hashlib.sha1(b"".join(f.read_bytes() for f in sorted(WEB_DIR.iterdir()) if f.is_file())).hexdigest()[:10]
@@ -350,7 +356,12 @@ class _ForwardedPrefix:
         if scope["type"] == "http":
             prefix = dict(scope["headers"]).get(b"x-forwarded-prefix", b"").decode("latin-1").rstrip("/")
             if re.fullmatch(r"(/[A-Za-z0-9._~%:@+-]+)+", prefix):
-                scope = {**scope, "root_path": scope.get("root_path", "") + prefix}
+                # Routes match on the path without the prefix; `root_path` makes the links bspd writes (/docs,
+                # llms.txt) carry it.
+                path = scope.get("path", "")
+                if path == prefix or path.startswith(prefix + "/"):
+                    path = path[len(prefix):] or "/"
+                scope = {**scope, "root_path": scope.get("root_path", "") + prefix, "path": path, "raw_path": path.encode()}
         await self.app(scope, receive, send)
 
 

@@ -108,3 +108,11 @@ def test_auth_token(tmp_path, monkeypatch):
         assert c.get("/api/v1/gpio/list").status_code == 200
         assert c.post("/api/v1/gpio/P7/set?level=low").status_code == 403
         assert c.post("/api/v1/gpio/P7/set?level=low", headers={"Authorization": "Bearer s3cret"}).status_code == 200
+
+
+def test_the_web_ui_works_under_a_proxy_prefix(client):
+    """A proxy that sends X-Forwarded-Prefix: the page and its static files answer under it."""
+    prefix = "/api/bsp/hosts/lab/panel"
+    assert client.get(f"{prefix}/", headers={"X-Forwarded-Prefix": prefix}).status_code == 200
+    css = client.get(f"{prefix}/static/style.css", headers={"X-Forwarded-Prefix": prefix})
+    assert css.status_code == 200 and css.headers["content-type"].startswith("text/css")
