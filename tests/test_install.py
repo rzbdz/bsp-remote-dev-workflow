@@ -63,3 +63,16 @@ def test_hints_come_from_configuration(tmp_path):
     text = Path(install.install(tmp_path, cat, None, "bsp", found)["file"]).read_text()
     assert "## Hints from this installation's configuration" in text and "team's ssh key" in text
     assert text.index("team's ssh key") < text.index("Below: the full bsp skill")
+
+
+def test_bspd_install_numbers_its_stages():
+    """bspd-install.sh says `--> [n/N] <what>` for each stage, in order, N the same on every line."""
+    import re
+
+    script = (ROOT / "deploy" / "bspd-install.sh").read_text()
+    steps = [(int(n), int(total), what) for n, total, what in re.findall(r'^\s*echo "--> \[(\d+)/(\d+)\] ([^"]+)"$', script, re.M)]
+    assert [n for n, _, _ in steps] == list(range(1, len(steps) + 1)) and len(steps) >= 5
+    assert {total for _, total, _ in steps} == {len(steps)}
+    assert any("Python environment" in what for _, _, what in steps) and steps[-1][2] == "checking health"
+    assert 'echo "BSPD-READY $ID $PORT $VERSION"' in script
+    assert "--progress-bar off" in script and "install -q" not in script                # pip says what it does

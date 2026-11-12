@@ -9,6 +9,8 @@
 # Idempotent: each run rebuilds the venv beside the old one, swaps it in, rewrites the unit and restarts the service.
 # The host config goes to <site>/hosts/<id>.yaml (default site /etc/bsp/site, made here; an existing site is kept and
 # only that file rewritten). The token goes to /etc/bsp/hostd.env (0600). Prints `BSPD-READY <id> <port> <version>`.
+# Each stage starts with a line `--> [n/N] <what>`, and long ones print a line at least every few seconds, so whoever
+# watches the install (boardlab's page) sees how far it is.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ID="" PORT=8765 BIND=127.0.0.1 TOKEN="" BOARD=auto RELAY=auto SITE=/etc/bsp/site PREFIX=/opt/bspd UNINSTALL="" PURGE=""
@@ -37,6 +39,20 @@ python3 -c 'import venv, ensurepip' 2>/dev/null || { echo "python3-venv is missi
 
 VERSION=$(cat REVISION 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo dev)
 echo "--> bspd $VERSION as $ID on $BIND:$PORT"
+export PYTHONUNBUFFERED=1
+# A long command, with a line every few seconds while it runs quiet.
+ticking() {
+  "$@" & local pid=$! n=0
+  while kill -0 "$pid" 2>/dev/null; do sleep 1; n=$((n + 1)); (( n % 5 )) || echo "    ... ${n}s"; done
+  wait "$pid"
+}
+# pip without progress bars, a line per package (its errors still go to stderr).
+pip_install() {
+  "$NEW/venv/bin/pip" install --disable-pip-version-check --progress-bar off "$@" \
+    | awk '/^(Collecting|Building wheel|Installing collected|Successfully installed)/ { print "    " $0; fflush() }'
+}
+
+echo "--> [1/6] looking at this machine (board, GPIO header)"
 
 # What this machine is: its board (for the GPIO header) from the device tree, matched against the packs' boards.
 MODEL=$(tr -d '\0' < /proc/device-tree/model 2>/dev/null || true)
@@ -66,18 +82,21 @@ mkdir -p "$PREFIX"
 NEW=$PREFIX/releases/$VERSION.$$
 rm -rf "$NEW"; mkdir -p "$NEW"
 cp -a . "$NEW/app"
-python3 -m venv "$NEW/venv"
-"$NEW/venv/bin/pip" install -q --disable-pip-version-check -U "pip>=24" || true
+echo "--> [2/6] creating the Python environment (a few minutes the first time)"
+ticking python3 -m venv "$NEW/venv"
+ticking pip_install -U "pip>=24" || true
+echo "--> [3/6] installing bsp"
 EXTRAS=server; [[ $RELAY == gpiod ]] && EXTRAS=server,gpiod
 # Editable, from the tree beside it: bsp finds its packs (board pin maps, SoC profiles) next to its source.
-"$NEW/venv/bin/pip" install -q --disable-pip-version-check -e "$NEW/app[$EXTRAS]"
-[[ -f "$NEW/app/third_party/serial-mux/pyproject.toml" ]] && "$NEW/venv/bin/pip" install -q --disable-pip-version-check -e "$NEW/app/third_party/serial-mux"
+ticking pip_install -e "$NEW/app[$EXTRAS]"
+[[ -f "$NEW/app/third_party/serial-mux/pyproject.toml" ]] && ticking pip_install -e "$NEW/app/third_party/serial-mux"
 ln -sfn "$NEW" "$PREFIX/current.new" && mv -Tf "$PREFIX/current.new" "$PREFIX/current"
 for b in bsp smtty serial-mux; do [[ -x $PREFIX/current/venv/bin/$b ]] && ln -sfn "$PREFIX/current/venv/bin/$b" /usr/local/bin/$b; done
 # Old releases: keep the one before, drop the rest.
 ls -1dt "$PREFIX"/releases/* 2>/dev/null | tail -n +3 | xargs -r rm -rf
 
 # The config, generated: the site's own hosts file for this id.
+echo "--> [4/6] writing the config"
 mkdir -p "$SITE/hosts" /etc/bsp /var/lib/bsp
 CONF=$SITE/hosts/$ID.yaml
 {
@@ -105,6 +124,7 @@ if [[ -n $TOKEN ]]; then umask 077; printf 'BSP_TOKEN=%s\n' "$TOKEN" > /etc/bsp/
 chmod 600 /etc/bsp/hostd.env
 command -v fastboot >/dev/null || echo "WARNING: fastboot is not installed: boards cannot be loaded or flashed (apt install fastboot)" >&2
 
+echo "--> [5/6] starting bsp-hostd"
 cat > /etc/systemd/system/bsp-hostd.service <<EOF
 [Unit]
 Description=bspd: this machine's boards (reset lines, consoles, download ports), driven by boardlab
@@ -129,6 +149,7 @@ EOF
 systemctl daemon-reload
 systemctl enable -q bsp-hostd.service
 systemctl restart bsp-hostd.service
+echo "--> [6/6] checking health"
 for _ in $(seq 1 30); do
   if curl -fsS -m 2 "http://127.0.0.1:$PORT/api/v1/health" >/dev/null 2>&1 || python3 -c "import urllib.request,sys; urllib.request.urlopen('http://127.0.0.1:$PORT/api/v1/health', timeout=2)" 2>/dev/null; then
     echo "BSPD-READY $ID $PORT $VERSION"; exit 0
