@@ -14,6 +14,7 @@ import hashlib
 import importlib
 import inspect
 import json
+import re
 import socket
 import time
 from contextlib import asynccontextmanager
@@ -207,8 +208,10 @@ def create_app(config: HostConfig) -> FastAPI:
         version=__version__,
         description="bsp dev-loop host controller. AI agents: start at GET /llms.txt or GET /api/v1/tools.",
         lifespan=lifespan,
+        root_path_in_servers=False,  # a proxy's prefix stays out of the schema bspd serves to everyone
     )
     app.state.hub = hub
+    app.add_middleware(_ForwardedPrefix)
 
     # ---- every error is a self-explaining envelope: what failed, why, and what to do next
     def envelope(request: Request, status: int, err: dict[str, Any]) -> JSONResponse:
@@ -254,10 +257,10 @@ def create_app(config: HostConfig) -> FastAPI:
 
         @app.middleware("http")
         async def _auth(request: Request, call_next):
-            if request.url.path.startswith("/api/") and request.method not in ("GET", "HEAD", "OPTIONS") \
-                    and not request.url.path.startswith(open_paths or ("\0",)):
-                tok = request.headers.get("x-bsp-token") or request.headers.get("authorization", "").removeprefix("Bearer ").strip()
-                if tok != config.auth_token:
+            path = request.scope["path"]  # without a proxy's prefix
+            if path.startswith("/api/") and request.method not in ("GET", "HEAD", "OPTIONS") \
+                    and not path.startswith(open_paths or ("\0",)):
+                if _token(request) != config.auth_token:
                     e = Forbidden("missing or wrong token", hint="send 'Authorization: Bearer <token>' or 'X-BSP-Token: <token>'; "
                                   "the token is server.auth_token in the host config (or env BSP_TOKEN)")
                     return envelope(request, e.status, e.to_dict())
@@ -278,8 +281,10 @@ def create_app(config: HostConfig) -> FastAPI:
     index_html = (WEB_DIR / "index.html").read_text(encoding="utf-8").replace("__V__", web_version)
 
     @app.get("/", include_in_schema=False)
-    async def index():
-        return HTMLResponse(index_html, headers={"Cache-Control": "no-cache"})
+    async def index(request: Request):
+        # A page requested with the token comes through a proxy that adds it to every request: it needs none of its own.
+        authed = bool(config.auth_token) and _token(request) == config.auth_token
+        return HTMLResponse(index_html.replace("__AUTHED__", "1" if authed else ""), headers={"Cache-Control": "no-cache"})
 
     return app
 
@@ -328,6 +333,25 @@ def _core_routes(app: FastAPI, hub: Hub) -> None:
     @app.get("/llms.txt", include_in_schema=False, response_class=PlainTextResponse)
     async def llms(request: Request):
         return _llms_txt(hub, str(request.base_url).rstrip("/"))
+
+
+def _token(request: Request) -> str:
+    return request.headers.get("x-bsp-token") or request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+
+
+class _ForwardedPrefix:
+    """Served under a path prefix by a reverse proxy (`X-Forwarded-Prefix: /some/prefix`): the links bspd writes out
+    (/docs, llms.txt) carry the prefix. The page itself uses relative URLs and needs nothing."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            prefix = dict(scope["headers"]).get(b"x-forwarded-prefix", b"").decode("latin-1").rstrip("/")
+            if re.fullmatch(r"(/[A-Za-z0-9._~%:@+-]+)+", prefix):
+                scope = {**scope, "root_path": scope.get("root_path", "") + prefix}
+        await self.app(scope, receive, send)
 
 
 def _tool_desc(s: CommandSpec) -> str:

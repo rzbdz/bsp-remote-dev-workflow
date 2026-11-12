@@ -7,6 +7,12 @@
   const lsGet = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
   const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } };
 
+  // Where this page is served from: bspd's own address, or a prefix on a proxy in front of it. Every URL the page
+  // uses is relative to it, so it works the same both ways.
+  const BASE = new URL('.', location.href).href.replace(/\/$/, '');
+  // A proxy that adds the token itself serves the page already authorized: no token to ask for.
+  const AUTHED = document.body.dataset.authed === '1';
+
   const S = {
     board: null, pins: {}, tools: {}, selected: null, ctlKey: null,
     token: lsGet('bsp.token'), evCount: 0, hist: [], histIdx: -1, refreshTimer: null,
@@ -41,7 +47,7 @@
     if (!st) return;
     $('#m-host').textContent = `${st.host} @ ${st.hostname}`;
     $('#m-ver').textContent = 'v' + st.version;
-    $('#token-btn').hidden = !st.auth;
+    $('#token-btn').hidden = !st.auth || AUTHED;
     const g = st.modules?.gpio_relay;
     if (!g) return;
     const be = g.backend || {};
@@ -63,7 +69,7 @@
     }
   }
   async function refreshStatus() {
-    const r = await api('GET', '/api/v1/status');
+    const r = await api('GET', 'api/v1/status');
     if (r.ok) renderStatus(r.result);
   }
 
@@ -174,7 +180,7 @@
   }
 
   async function refreshPins() {
-    const r = await api('GET', '/api/v1/gpio/list?all=true');
+    const r = await api('GET', 'api/v1/gpio/list?all=true');
     if (!r.ok) return;
     for (const p of r.result) {
       S.pins[p.key] = p;
@@ -390,7 +396,7 @@
   // ------------------------------------------------------- run + equivalents
   async function run(name, args) {
     showEquiv(S.lastEquiv = equiv(name, args));
-    const r = await api('POST', '/api/v1/tools/' + name, args);
+    const r = await api('POST', 'api/v1/tools/' + name, args);
     if (!r.ok) {
       toast(errText(r.error), 'err', 6000);
       scheduleRefresh();
@@ -427,9 +433,9 @@
     }
     Object.keys(body).forEach((k) => body[k] === undefined && delete body[k]);
     const auth = S.token ? ` -H 'Authorization: Bearer ${S.token}'` : '';
-    const curl = `curl -X POST ${location.origin}${path}${auth}` +
+    const curl = `curl -X POST ${BASE}${path}${auth}` +
       (Object.keys(body).length ? ` -H 'Content-Type: application/json' -d '${JSON.stringify(body)}'` : '');
-    return { cli: `BSP_URL=${location.origin} ${cli.join(' ')}`, curl };
+    return { cli: `BSP_URL=${BASE} ${cli.join(' ')}`, curl };
   }
   function showEquiv(e) {
     const box = $('#equiv');
@@ -472,10 +478,10 @@
     $('#ev-count').textContent = ++S.evCount;
   }
   async function connectEvents() {
-    const r = await api('GET', '/api/v1/events/recent?limit=50');
+    const r = await api('GET', 'api/v1/events/recent?limit=50');
     let last = 0;
     if (r.ok) for (const ev of r.result) { pushEvent(ev); last = ev.seq; }
-    const es = new EventSource('/api/v1/events' + (last ? `?since=${last}` : ''));
+    const es = new EventSource('api/v1/events' + (last ? `?since=${last}` : ''));
     es.onopen = () => { $('#conn-dot').className = 'dot on'; $('#conn-text').textContent = 'live'; };
     es.onerror = () => { $('#conn-dot').className = 'dot off'; $('#conn-text').textContent = 'reconnecting'; };
     es.onmessage = (m) => {
@@ -502,7 +508,7 @@
     lsSet('bsp.hist', JSON.stringify(S.hist));
     if (line.trim() === 'clear') { $('#console-out').textContent = ''; return; }
     conWrite(`bsp> ${line}\n`, 'cmd');
-    const r = await api('POST', '/api/v1/cli', { line });
+    const r = await api('POST', 'api/v1/cli', { line });
     if (r.output !== undefined) conWrite(r.output, r.exit_code ? 'err' : '');
     else conWrite(errText(r.error) + '\n', 'err');
     scheduleRefresh();
@@ -542,7 +548,7 @@
       lsSet('bsp.token', S.token || '');
     });
     const [st, board, tools] = await Promise.all([
-      api('GET', '/api/v1/status'), api('GET', '/api/v1/board/info'), api('GET', '/api/v1/tools'),
+      api('GET', 'api/v1/status'), api('GET', 'api/v1/board/info'), api('GET', 'api/v1/tools'),
     ]);
     if (!st.ok) {
       $('#conn-dot').className = 'dot off';

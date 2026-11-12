@@ -76,6 +76,31 @@ def test_misc_pages(client):
     assert client.get("/api/v1/events/recent").json()["result"][0]["topic"]
 
 
+def test_web_ui_relative_urls(tmp_path, monkeypatch):
+    """The page works at / and under a reverse proxy's prefix: every URL it uses is relative."""
+    import re
+
+    monkeypatch.setenv("BSP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("BSP_TOKEN", "s3cret")
+    with TestClient(create_app(HostConfig.load(ROOT / "examples" / "site" / "hosts" / "dev-mock.yaml"))) as c:
+        html = c.get("/").text
+        assert not re.search(r'(src|href)="/', html)
+        assert 'href="static/style.css?v=' in html and 'src="static/app.js?v=' in html
+        assert 'data-authed=""' in html
+        js = c.get("/static/app.js").text
+        assert not re.search(r"""['"`]/(api|static|docs|llms)""", js) and "location.origin" not in js
+        # through a proxy that adds the token: the page asks for none, and bspd's own links carry the prefix
+        proxied = {"Authorization": "Bearer s3cret", "X-Forwarded-Prefix": "/api/bsp/hosts/h1/ui"}
+        assert 'data-authed="1"' in c.get("/", headers=proxied).text
+        assert "/api/bsp/hosts/h1/ui/openapi.json" in c.get("/docs", headers=proxied).text
+        assert "http://testserver/api/bsp/hosts/h1/ui/api/v1/" in c.get("/llms.txt", headers=proxied).text
+        assert c.post("/api/v1/gpio/P7/set?level=low", headers=proxied).status_code == 200
+        assert c.post("/api/v1/gpio/P7/set?level=low", headers={"X-Forwarded-Prefix": "/x"}).status_code == 403
+        # and directly, as before
+        assert "servers" not in c.get("/openapi.json").json()
+        assert '"/openapi.json"' in c.get("/docs").text or "'/openapi.json'" in c.get("/docs").text
+
+
 def test_auth_token(tmp_path, monkeypatch):
     monkeypatch.setenv("BSP_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("BSP_TOKEN", "s3cret")
