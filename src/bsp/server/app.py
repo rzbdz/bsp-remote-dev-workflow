@@ -58,7 +58,8 @@ class Hub:
         self.started = time.time()
         config.state_dir.mkdir(parents=True, exist_ok=True)
         ctx = ModuleContext(config.host_id, self.bus, config.state_dir, config.config_dir, jobs=self.jobs,
-                            port=config.port, auth_token=config.auth_token)
+                            port=config.port, auth_token=config.auth_token, env=dict(config.env),
+                            bind=config.bind, announce=config.announce)
         self.ctx = ctx
         self.modules: dict[str, Module] = {
             name: MODULES.get(name)(ctx, mcfg) for name, mcfg in config.modules.items() if mcfg.get("enabled", True)

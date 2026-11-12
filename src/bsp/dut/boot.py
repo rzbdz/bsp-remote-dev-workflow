@@ -6,6 +6,7 @@ import re
 import time
 from typing import Any, Callable
 
+from ..core.env import expand
 from ..core.errors import HardwareError, HardwareTimeout, InvalidRequest
 from ..sdk.catalog import Instance
 from .control import ControlBackend
@@ -16,7 +17,9 @@ Log = Callable[[str], None]
 
 class BootRunner:
     def __init__(self, dut_id: str, control: ControlBackend, fastboot: Fastboot, console: SerialConsole,
-                 store: ArtifactStore, hooks=None, download_mode: dict | None = None, media=None):
+                 store: ArtifactStore, hooks=None, download_mode: dict | None = None, media=None,
+                 env: dict[str, Any] | None = None, network: dict[str, Any] | None = None,
+                 product_dir: Callable[[str | None, str | None], str | None] | None = None):
         self.dut_id = dut_id
         self.control = control
         self.fb = fastboot
@@ -27,6 +30,11 @@ class BootRunner:
         self.download_mode = download_mode or {}
         # how it boots its media when FDL is strapped (mediaboot.MediaBoot), if its SoC profile says
         self.media = media
+        # Host values for hook requests: the host config's `env:` map, its derived network, and how a
+        # product directory is resolved (SDK id, remote artifact directory) -> path on this host.
+        self.env = dict(env or {})
+        self.network = dict(network or {})
+        self.product_dir = product_dir
 
     # ------------------------------------------------------------ waits --
     def wait_fastboot(self, product: str, timeout: float, log: Log) -> dict[str, str]:
@@ -107,10 +115,12 @@ class BootRunner:
         return (cfg.get("fdl") or {}).get("strategy", "strapped") == "strapped"
 
     def run_steps(self, steps: list[dict[str, Any]], log: Log, arts: dict[str, Any] | None = None,
-                  images: dict[str, Any] | None = None, what: str = "step", since=None) -> None:
+                  images: dict[str, Any] | None = None, what: str = "step", since=None,
+                  sdk: str | None = None, artifacts_dir: str | None = None) -> None:
         """Run boot steps (an SDK recipe's, or a media boot's) in order. `arts` are pulled artifacts by role,
         `images` the SoC profile's images by key (each with a verified local `path`); `since` a console mark taken
-        before what led up to the steps (a reset), which the first `wait` and `check` look from."""
+        before what led up to the steps (a reset), which the first `wait` and `check` look from. `sdk` and
+        `artifacts_dir` name the build output a hook step works on, for its request."""
         arts, images = arts or {}, images or {}
         mark = self.console.mark() if since is None else since   # console output since the last action, for `wait`
         action = mark                                             # ... and since it began, for `check`
@@ -128,7 +138,7 @@ class BootRunner:
                 why = media.unavailable() if media is not None else "the board has no media boot"
                 log(f"{label}: skipped: FDL is strapped on this board ({step.get('why', 'cold boot')}; {why})")
                 continue
-            if kind in ("enter-fdl", "reset", "boot-media", "continue", "stage", "oem", "flash", "hook"):
+            if kind in ("enter-fdl", "reset", "boot-media", "continue", "stage", "oem", "flash", "hook", "send"):
                 action = self.console.mark()
             if kind == "boot-media" and not strapped:
                 mark = self.console.mark()
@@ -189,13 +199,44 @@ class BootRunner:
                 if step.get("fastboot"):
                     self.wait_fastboot(step["fastboot"], max(5.0, timeout - (time.monotonic() - ts)), log)
                 log(f"{label}: {step.get('serial') or step.get('fastboot')} after {time.monotonic() - ts:.1f}s")
+            elif kind == "send":
+                mark = self.console.mark()
+                timeout = float(step.get("timeout", 60))
+                ts = time.monotonic()
+                out = self.console.send(step["text"], step.get("serial"), step.get("fail"), timeout,
+                                        step.get("stall"), step.get("nudge"))
+                log(f"{label}: sent {step['text']!r}"
+                    + (f", /{step['serial']}/ seen" if step.get("serial") else "")
+                    + (f" after {time.monotonic() - ts:.1f}s" if step.get("serial") else ""))
+                if log is not None and out.get("output"):
+                    for line in str(out["output"]).rstrip("\n").splitlines()[-10:]:
+                        log(f"  {line}")
             elif kind == "hook":
                 if self.hooks is None:
                     raise InvalidRequest("hook steps need a hook runner on this host")
                 req = {"dut": self.dut_id, "usb": self.fb.usb, "console": self.console.alias,
-                       "fastboot": self.fb.binary, "args": step.get("args") or {},
+                       "fastboot": self.fb.binary, "args": expand(step.get("args") or {}, self.env),
                        "artifacts": {r: a["path"] for r, a in arts.items()},
-                       "images": {k: v["path"] for k, v in images.items() if v.get("path")}}
+                       "images": {k: v["path"] for k, v in images.items() if v.get("path")},
+                       "env": dict(self.env),
+                       "network": {**self.network, "console": self.console.alias}}
+                if sdk is not None:
+                    req["sdk"] = sdk
+                if artifacts_dir is not None:
+                    req["artifacts_dir"] = artifacts_dir
+                if callable(self.product_dir):
+                    try:
+                        product_dir = self.product_dir(sdk, artifacts_dir)
+                    except InvalidRequest:
+                        if sdk is not None or artifacts_dir is not None:
+                            raise
+                        product_dir = None          # e.g. a media boot: no SDK context for a {sdk} template
+                    if product_dir is not None:
+                        req["product_dir"] = product_dir
+                elif self.product_dir is not None:
+                    req["product_dir"] = self.product_dir
+                elif artifacts_dir is not None:      # nothing configured: the artifact directory is the product
+                    req["product_dir"] = artifacts_dir
                 res = self.hooks.run(step.get("kind", "flash"), step["name"], req,
                                      timeout=float(step.get("timeout", 1800)), log=log,
                                      progress=getattr(log, "progress", None))
@@ -271,7 +312,8 @@ class BootRunner:
         t0 = time.monotonic()
         # The board's SoC images too, so `stage image:` and hook steps (a flasher shipped as an image) find theirs.
         images = (self.media.profile.get("images") or {}) if self.media is not None else {}
-        self.run_steps(plan["steps"], log, arts=arts, images=images)
+        artifacts_dir = sdk.artifact_dir() if hasattr(sdk, "artifact_dir") else None
+        self.run_steps(plan["steps"], log, arts=arts, images=images, sdk=sdk.id, artifacts_dir=artifacts_dir)
         log(f"done in {time.monotonic() - t0:.1f}s")
         return {"dut": self.dut_id, "sdk": sdk.id, "method": method, "variant": variant,
                 "artifacts": {r: {k: a[k] for k in ("remote", "sha256", "size", "age_s")} for r, a in arts.items()},

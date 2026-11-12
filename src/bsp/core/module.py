@@ -23,6 +23,10 @@ class ModuleContext:
     jobs: JobManager | None = None
     port: int = 8765     # where this host's API listens (for helpers that call back)
     auth_token: str | None = None   # the token this host's API asks of writers (server.auth_token)
+    # values from the host config's top-level `env:` map (already resolved); hooks receive them
+    env: dict[str, str] = field(default_factory=dict)
+    bind: str = "127.0.0.1"          # server.bind, for deriving this host's own addresses
+    announce: dict[str, Any] | None = None   # server.announce, ditto
     # in-process service registry: modules publish objects others may use
     # (e.g. gpio_relay publishes its service; the dut module drives it)
     services: dict[str, Any] = field(default_factory=dict)

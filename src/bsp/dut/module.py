@@ -17,9 +17,11 @@ import re
 from typing import Any
 
 from ..core.commands import Command
+from ..core.env import expand
 from ..core.errors import Conflict, HardwareError, InvalidRequest, BspError
 from ..core.hooks import HookRunner
 from ..core.module import MODULES, Module, ModuleContext
+from ..core.net import local_addresses
 from ..sdk.catalog import SdkCatalog
 from .boot import BootRunner
 from .catalog import DutRegistry, DutSpec
@@ -41,7 +43,8 @@ class Board:
     def runner(self, mod: "DutModule") -> BootRunner:
         expect = (self.spec.control.get("fdl") or {}).get("expect") or mod.socs.download_mode(self.spec.soc)
         return BootRunner(self.spec.id, self.control, self.fastboot, self.console, mod.store, mod.hooks, expect,
-                          media=self.media(mod))
+                          media=self.media(mod), env=mod.ctx.env, network=mod.network(),
+                          product_dir=mod.product_dir)
 
     def media(self, mod: "DutModule") -> MediaBoot:
         """Booting its media although its reset lands in download mode (see mediaboot.py)."""
@@ -70,6 +73,12 @@ class DutModule(Module):
         self.probe_cfg = config.get("probe") or {}
         # `dut flash`: packages the host takes (uploaded or downloaded), and where it unpacks them
         self.flash_cfg = config.get("flash") or {}
+        # How hooks name the build output: a literal path, or a template with {sdk}/{artifacts_dir};
+        # absent = the artifact directory on the build server is the product.
+        self.product_dir_tpl = config.get("product_dir")
+        # `network`: what hooks tell a board to use (defaults from server.bind/announce, see resolve_network)
+        self.network_cfg = config.get("network") or {}
+        self._network: dict[str, Any] | None = None
         # The site's catalog, under the registry's copy when this host follows one (see server/catalog_follow.py).
         self._sdk_roots = layered("sdk", site)
         self._catalog_layer = ctx.state_dir / "catalog"
@@ -127,7 +136,7 @@ class DutModule(Module):
         files = [self._files_layer / k for k in ("socs", "hooks")]
         self.socs = SocProfiles(layered("socs", self._site) + ([files[0]] if files[0].is_dir() else []))
         hooks = layered("hooks", self._site) + ([files[1]] if files[1].is_dir() else [])
-        self.hooks = HookRunner(self._hook_dirs + tuple(str(d) for d in reversed(hooks)))
+        self.hooks = HookRunner(self._hook_dirs + tuple(str(d) for d in reversed(hooks)), env=self.ctx.env)
 
     def _load_catalog(self) -> SdkCatalog:
         return SdkCatalog(self._sdk_roots + ([self._catalog_layer] if self._catalog_layer.is_dir() else []))
@@ -162,6 +171,35 @@ class DutModule(Module):
 
         return layer_rev(self._catalog_layer)
 
+    def network(self) -> dict[str, Any]:
+        """What hooks tell a board to use: the board subnet and this host's addresses (see resolve_network)."""
+        if self._network is None:
+            self._network = resolve_network(self.network_cfg, bind=self.ctx.bind, announce=self.ctx.announce)
+        return dict(self._network)
+
+    def product_dir(self, sdk: str | None = None, artifacts_dir: str | None = None) -> str | None:
+        """Where hooks on this host find a build's product: `modules.dut.product_dir` if set (a literal
+        path or a template with {sdk}/{artifacts_dir}), else the artifacts directory itself."""
+        tpl = self.product_dir_tpl
+        if tpl is None or tpl == "":
+            return artifacts_dir
+        template = str(tpl)
+        values = {"sdk": sdk, "artifacts_dir": artifacts_dir}
+        missing = [k for k in ("sdk", "artifacts_dir")
+                   if ("{" + k + "}") in template and not values[k]]
+        if missing:
+            raise InvalidRequest(
+                f"modules.dut.product_dir uses {{{missing[0]}}}, but it is not known here",
+                hint="the template may use {sdk} and {artifacts_dir} for a boot recipe, which knows both; "
+                     "a package flash always passes its unpacked package as product_dir",
+            )
+        try:
+            out = template.format(**{k: v or "" for k, v in values.items()})
+        except (KeyError, IndexError, ValueError) as e:
+            raise InvalidRequest(f"modules.dut.product_dir: cannot format {template!r}: {e}",
+                                 hint="the placeholders are {sdk} and {artifacts_dir}") from None
+        return os.path.expanduser(out)
+
     def login_list(self) -> dict[str, Any]:
         rows = [{"login": u, "dut": d} for u, d in sorted(self.logins._ours().items())]
         return {"enabled": self.logins.enabled, "logins": rows, "error": self.logins.last.get("error")}
@@ -176,7 +214,8 @@ class DutModule(Module):
     def _list_consoles(self) -> list[dict[str, Any]]:
         from pathlib import Path
 
-        res = self.hooks.run("probe", "consoles", {"serial_mux_run": str(Path(self.serial_log_dir).parent / "run")}, timeout=30)
+        res = self.hooks.run("probe", "consoles", {"serial_mux_run": str(Path(self.serial_log_dir).parent / "run"),
+                                                   "env": dict(self.ctx.env), "network": self.network()}, timeout=30)
         return res.data.get("consoles", [])
 
     def refresh_slots(self) -> dict[str, Any]:
@@ -560,7 +599,10 @@ class DutModule(Module):
                     artifacts["flash-zip"] = str(path)
                 req = {"dut": dut, "usb": b.spec.usb, "console": b.console.alias, "fastboot": b.fastboot.binary,
                        "package_dir": str(pkg_dir), "artifacts": artifacts, "images": images, "timeout": timeout,
-                       "args": dict(self.flash_cfg.get("args") or {})}
+                       "product_dir": str(pkg_dir),      # the unpacked package is the product here
+                       "env": dict(self.ctx.env),
+                       "network": {**self.network(), "console": b.console.alias},
+                       "args": expand(dict(self.flash_cfg.get("args") or {}), self.ctx.env)}
                 try:
                     res = self.hooks.run("flash", name, req, timeout=timeout, log=log,
                                          progress=getattr(log, "progress", None))
@@ -850,7 +892,8 @@ class DutModule(Module):
 
     def _usb_now(self) -> dict[str, dict[str, Any]]:
         vids = self.probe_cfg.get("usb_vids") or self.socs.usb_vids()
-        res = self.hooks.run("probe", "usb-devices", {"vids": vids}, timeout=30)
+        res = self.hooks.run("probe", "usb-devices", {"vids": vids, "env": dict(self.ctx.env),
+                                                     "network": self.network()}, timeout=30)
         return {d["usb"]: d for d in res.data.get("devices", [])}
 
     def _refresh(self, dut: str, name: str | None, rename: bool, board_name: str | None, soc_given: str | None,
@@ -970,6 +1013,27 @@ class DutModule(Module):
 
 
 # =================================================================== views --
+def resolve_network(cfg: dict[str, Any] | None, bind: str = "127.0.0.1",
+                    announce: dict[str, Any] | None = None, local=None) -> dict[str, Any]:
+    """The network facts a hook may need, with defaults from `server.bind`/`server.announce`.
+
+    `modules.dut.network` wins; then an address the host announces to its registry; then a
+    concrete `server.bind`; then this machine's own addresses. `board_subnet` has no default:
+    bsp does not run the boards' DHCP server and cannot know it, so it is null unless set.
+    """
+    cfg = dict(cfg or {})
+    announced = [str(a) for a in ((announce or {}).get("addresses") or []) if a]
+    host = str(cfg.get("host_address") or "") or (announced[0] if announced else "")
+    if not host and bind and bind not in ("0.0.0.0", "::", "", "localhost", "127.0.0.1", "::1"):
+        host = bind
+    if not host:
+        found = local() if callable(local) else (local if local is not None else local_addresses())
+        host = found[0] if found else None
+    export = str(cfg.get("export_address") or "") or (announced[0] if announced else host)
+    return {"board_subnet": cfg.get("board_subnet") or None,
+            "host_address": host, "export_address": export}
+
+
 def _stage(fb: dict | None, download_rx: str | None) -> str:
     """Coarse stage from the fastboot view only: download mode / fastboot / not on the bus."""
     import re

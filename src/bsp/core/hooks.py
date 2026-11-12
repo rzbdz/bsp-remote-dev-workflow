@@ -45,10 +45,13 @@ class HookResult:
 
 
 class HookRunner:
-    def __init__(self, extra_dirs: tuple[str, ...] = ()):
-        env = [p for p in os.environ.get("BSP_HOOKS_PATH", "").split(":") if p]
-        dirs = [*env, *extra_dirs, str(Path.home() / ".config" / "bsp" / "hooks"), str(REPO_HOOKS)]
+    def __init__(self, extra_dirs: tuple[str, ...] = (), env: dict[str, str] | None = None):
+        env_dirs = [p for p in os.environ.get("BSP_HOOKS_PATH", "").split(":") if p]
+        dirs = [*env_dirs, *extra_dirs, str(Path.home() / ".config" / "bsp" / "hooks"), str(REPO_HOOKS)]
         self.dirs = [Path(d).expanduser() for d in dirs]
+        # The host config's `env:` map: in the hook's process environment too, so shell hooks can
+        # use `${NAME:-default}` as they always have.
+        self.env = dict(env or {})
 
     def find(self, kind: str, name: str) -> Path:
         for d in self.dirs:
@@ -80,7 +83,7 @@ class HookRunner:
         t0 = time.monotonic()
         proc = subprocess.Popen([str(path)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, text=True, bufsize=1, start_new_session=True,
-                                env={**os.environ, "BSP_HOOK_KIND": kind, "BSP_HOOK_NAME": name,
+                                env={**os.environ, **self.env, "BSP_HOOK_KIND": kind, "BSP_HOOK_NAME": name,
                                      "PYTHONUNBUFFERED": "1"})
         err_chunks: list[str] = []
         timed_out = threading.Event()

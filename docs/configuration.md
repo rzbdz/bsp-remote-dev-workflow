@@ -73,6 +73,11 @@ server:
   state_dir: /var/lib/bsp        # leases, probed boards, runtime GPIO settings, artifact cache
   auth_token: null               # set it whenever bind is not 127.0.0.1, here or as BSP_TOKEN in
                                  # /etc/bsp/hostd.env on the host (see SECURITY.md)
+env:                             # values hooks receive: see "Host environment" below
+  BSP_TFTP_SERVER: 192.0.2.20
+  BSP_SDK_OUTPUT: /srv/sdk-output
+  BSP_SERIAL_LOG_DIR: /root/.serial-mux/logs
+  BSP_SMTTY: smtty
 modules:
   gpio_relay:                    # list it before dut: dut drives reset lines through it
     board: example-40pin         # a boards/<id>.yaml from a pack or the site
@@ -92,6 +97,12 @@ modules:
     serial_log_dir: ~/.serial-mux/logs
     fastboot: fastboot
     hook_dirs: []                # extra hook directories, searched first
+    product_dir: "{artifacts_dir}"  # what hooks call the product: a path, or a template with
+                                 # {sdk} / {artifacts_dir}; absent = the artifact directory itself
+    network:                     # what hooks tell a board to use (all keys optional)
+      board_subnet: 192.0.2.0/24 # the boards' DHCP subnet (no default: bsp does not run that DHCP)
+      host_address: 192.0.2.20   # this host on the board network (default: server.bind or an announced address)
+      export_address: 192.0.2.20 # the address other machines use (default: an announced address, else host_address)
     ssh_console:                 # optional: `ssh bsp-<dut>@host` opens that board's console
       enabled: false
       prefix: bsp-
@@ -111,6 +122,42 @@ modules:
 
 Relative paths are resolved against the directory of the host file. Environment variables
 `BSP_BIND`, `BSP_PORT`, `BSP_STATE_DIR` and `BSP_TOKEN` override the `server` keys.
+
+### Host environment
+
+The top-level `env:` map holds values for hooks: any name, as many as you need. Hooks receive
+the map as `req["env"]`, in their process environment, and may use `${NAME}` and
+`${NAME:-default}` in their `args` (see [hooks/README.md](../hooks/README.md)).
+
+```yaml
+env:
+  BSP_TFTP_SERVER: 192.0.2.20       # literal values
+  BSP_SDK_OUTPUT: /srv/sdk-output
+  BSP_SERIAL_LOG_DIR: /root/.serial-mux/logs
+  BSP_SMTTY: smtty
+  BSP_HOME: env:HOME                # `env:NAME`: take bsp-hostd's process environment
+```
+
+A string written exactly as `env:NAME` is a reference to the environment bsp-hostd runs with;
+this works anywhere in the host file (top level, `server`, `modules`, nested lists and maps), so
+paths and tokens need not be repeated. `env:NAME` is resolved once at startup; when `NAME` is
+unset, bsp-hostd refuses to start and names it. For the service, put such variables in
+`/etc/bsp/hostd.env`.
+
+Hook arguments expand from the **host env map** (not from the whole process environment), so a
+hook gets the same values whether it reads `req["env"]`, its own environment, or an `args` entry.
+
+### Product and network for hooks
+
+`modules.dut.product_dir` says where hooks on this host find a build's product. It may be a
+literal path, or a template with `{sdk}` (the SDK instance id) and `{artifacts_dir}` (the
+artifact directory on the build server); with no value the artifact directory itself is passed.
+`bsp dut flash` package hooks always get the unpacked package directory instead.
+
+`modules.dut.network` gives hooks the board network facts they would otherwise guess: the
+boards' DHCP subnet, this host's address there, and the address other machines use. Missing
+keys default from `server.announce.addresses` (first entry) and `server.bind` (a concrete
+address); `board_subnet` has no default because bsp does not run the boards' DHCP server.
 
 ### Site images
 

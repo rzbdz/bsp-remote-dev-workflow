@@ -2,6 +2,7 @@ import json
 import sys
 import os
 import stat
+import subprocess
 from pathlib import Path
 
 import time
@@ -84,6 +85,7 @@ class FakeConsole:
     def __init__(self, tmp):
         self.path = tmp / "console.log"
         self.path.write_text("")
+        self.sent = []
 
     def emit(self, text):
         with open(self.path, "a") as f:
@@ -107,6 +109,13 @@ class FakeConsole:
         if pattern and not re.search(pattern, text):
             raise HardwareError(f"/{pattern}/ not seen: {text!r}")
         return text
+
+    def send(self, text, pattern=None, fail=None, timeout=60, stall=None, nudge=None):
+        self.sent.append(text)
+        self.emit(f"{text}\n")
+        if pattern:
+            self.emit("READY\n")
+        return {"sent": text, "output": "READY" if pattern else ""}
 
 
 class FakeControl:
@@ -142,6 +151,72 @@ def test_boot_runner_uboot_only_variant(tmp_path):
     fb = FakeFastboot(con)
     BootRunner("b1", FakeControl(con), fb, con, FakeStore()).run(sdk, "load", "uboot-only", lambda m: None)
     assert [c[1].rsplit("/", 1)[-1] for c in fb.calls if c[0] == "stage"] == ["FSBL.bin", "u-boot-opensbi.itb"]
+
+
+def test_boot_runner_send_step_types_one_line_and_waits(tmp_path):
+    con = FakeConsole(tmp_path)
+    lines = []
+    BootRunner("b1", FakeControl(con), FakeFastboot(con), con, FakeStore()).run_steps(
+        [{"do": "send", "text": "reboot", "serial": "READY", "timeout": 5}], lines.append)
+    assert con.sent == ["reboot"]
+    assert any("sent 'reboot'" in line and "/READY/ seen" in line for line in lines)
+
+
+# ------------------------------------------------------ serial send (echo) --
+def _console(tmp_path):
+    from bsp.dut import hostio
+
+    (tmp_path / "b1").mkdir(exist_ok=True)
+    return hostio.SerialConsole("b1", log_dir=str(tmp_path))
+
+
+def _fake_smtty(monkeypatch, log, *chunks):
+    from bsp.dut import hostio
+
+    def fake_run(argv, timeout):
+        with open(log, "a") as f:
+            for chunk in chunks:
+                f.write(chunk)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(hostio, "_run", fake_run)
+
+
+def test_console_send_does_not_accept_the_echoed_line(tmp_path, monkeypatch):
+    """`text` itself contains the wait pattern; only what the board prints after the echo counts."""
+    con = _console(tmp_path)
+    _fake_smtty(monkeypatch, con._log_path(), "[2026-11-12 10:00:00] echo READY\nREADY\n")
+    out = con.send("echo READY", "READY", timeout=2)
+    assert out["sent"] == "echo READY" and "READY" in out["output"]
+
+
+def test_console_send_times_out_on_the_echo_alone(tmp_path, monkeypatch):
+    con = _console(tmp_path)
+    _fake_smtty(monkeypatch, con._log_path(), "[2026-11-12 10:00:00] reboot now\n")
+    with pytest.raises(HardwareTimeout):
+        con.send("reboot now", "reboot now", timeout=0.2)
+
+
+def test_console_send_fail_pattern_in_the_echo_is_not_a_failure(tmp_path, monkeypatch):
+    con = _console(tmp_path)
+    _fake_smtty(monkeypatch, con._log_path(), "[2026-11-12 10:00:00] watch PANIC\n")
+    with pytest.raises(HardwareTimeout):
+        con.send("watch PANIC", "released", fail="PANIC", timeout=0.2)
+
+
+def test_console_send_without_an_echo_matches_the_output(tmp_path, monkeypatch):
+    con = _console(tmp_path)
+    _fake_smtty(monkeypatch, con._log_path(), "READY\n")
+    out = con.send("status", "READY", timeout=1)
+    assert out["output"].startswith("READY")
+
+
+def test_a_send_step_refuses_more_than_one_line(tmp_path):
+    con = _console(tmp_path)
+    with pytest.raises(InvalidRequest):
+        con.send("one\ntwo", timeout=1)
+    with pytest.raises(InvalidRequest):
+        con.send("   ", timeout=1)
 
 
 # ------------------------------------------------------------------ hooks --

@@ -7,6 +7,14 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Host environment: a top-level `env:` map in `hosts/<host>.yaml`, and `env:NAME` anywhere in
+  the file to take a value from bsp-hostd's environment. Hooks get it as `req["env"]`, in their
+  process environment, and `${NAME}` / `${NAME:-default}` in their `args`.
+- Boot recipe step `do: send`: type one line on the console and optionally wait for a regex,
+  without the console's echo of the line satisfying the wait or failure pattern.
+- Hook requests carry `env`, `network` (`modules.dut.network`: board subnet, host and export
+  addresses), and `product_dir` (`modules.dut.product_dir`, or the artifact directory);
+  boot-recipe hooks also get `sdk` and `artifacts_dir`.
 - Slots (`bsp slot list|status|console|pipe|scan|forget`): every serial console on a host is a slot
   with a serial-mux console of its own, usable before any board is registered. Boards, reset lines
   and download ports are attached to slots; removing a board leaves its slot and its history.

@@ -136,3 +136,34 @@ def test_a_recipe_can_stop_at_a_break_point():
         with pytest.raises(InvalidRequest) as e:
             sdk.boot_plan("load", brk="kernel")
         assert "break points: uboot" in e.value.hint
+
+
+def test_a_send_step_needs_one_non_empty_line_with_valid_regexes():
+    import pathlib, tempfile, yaml
+
+    with tempfile.TemporaryDirectory() as d:
+        root = pathlib.Path(d)
+        for part in ("families", "servers", "instances"):
+            (root / part).mkdir()
+        (root / "families" / "f.yaml").write_text(yaml.safe_dump(
+            {"id": "f", "build": {"runner": "make", "targets": {"all": "all"}},
+             "artifacts": {"dir": "out", "roles": {}}}))
+        (root / "servers" / "s.yaml").write_text(yaml.safe_dump(
+            {"id": "s", "host": "h.example.test", "user": "u"}))
+
+        def load(steps):
+            (root / "instances" / "k.yaml").write_text(yaml.safe_dump(
+                {"id": "k", "family": "f", "server": "s", "path": "/w", "boot": {
+                    "load": {"status": "ready", "steps": steps},
+                    "download": {"status": "todo", "steps": []}}}))
+            return SdkCatalog(root).get("k")
+
+        sdk = load([{"do": "send", "text": "reboot", "serial": "login:", "fail": "panic"}])
+        assert sdk.boot_plan("load")["steps"] == [{"do": "send", "text": "reboot", "serial": "login:", "fail": "panic"}]
+        for bad, hint in [([{"do": "send"}], "text"),
+                          ([{"do": "send", "text": "  "}], "text"),
+                          ([{"do": "send", "text": "one\ntwo"}], "one line"),
+                          ([{"do": "send", "text": "x", "serial": "["}], "regex")]:
+            with pytest.raises(InvalidRequest) as e:
+                load(bad)
+            assert hint in e.value.message

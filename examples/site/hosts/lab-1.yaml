@@ -7,6 +7,11 @@ server:
   port: 8765
   state_dir: /var/lib/bsp      # probed DUTs, leases, runtime GPIO config, artifact cache
   auth_token: null             # or env BSP_TOKEN: required for POST
+env:                           # values hooks receive as req["env"], in their process environment and in args
+  BSP_TFTP_SERVER: 192.0.2.20
+  BSP_SDK_OUTPUT: /srv/sdk-output
+  BSP_SERIAL_LOG_DIR: /root/.serial-mux/logs
+  BSP_SMTTY: smtty
 modules:
   gpio_relay:                  # before dut: dut drives the reset/FDL lines through it
     board: example-40pin       # boards/<id>.yaml
@@ -22,6 +27,11 @@ modules:
     serial_mux: serial-mux
     serial_log_dir: /root/.serial-mux/logs
     fastboot: fastboot
+    product_dir: "{artifacts_dir}"       # what hooks call the product; or a literal path / {sdk} template
+    network:                    # what hooks tell a board to use; defaults come from server.bind/announce
+      board_subnet: 192.0.2.0/24
+      host_address: 192.0.2.20
+      export_address: 192.0.2.20
     probe:
       watch_s: 3.0             # observation window after each candidate reset pulse
       pulse_ms: 1000

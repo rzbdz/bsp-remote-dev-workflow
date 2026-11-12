@@ -171,8 +171,10 @@ class Prober:
         if slots is not None:
             return self._slot_consoles(log)
         used = self._used()
+        env, network = _host_fields(self.mod)
         res = self.mod.hooks.run("probe", "consoles", {
-            "serial_mux_run": str(Path(self.mod.serial_log_dir).parent / "run")}, timeout=30, log=log)
+            "serial_mux_run": str(Path(self.mod.serial_log_dir).parent / "run"),
+            "env": env, "network": network}, timeout=30, log=log)
         cons = []
         for c in res.data.get("consoles", []):
             if c.get("alias") in used["consoles"]:
@@ -208,7 +210,9 @@ class Prober:
         return out
 
     def usb_snapshot(self) -> dict[str, dict[str, Any]]:
-        res = self.mod.hooks.run("probe", "usb-devices", {"vids": self.vids}, timeout=30)
+        env, network = _host_fields(self.mod)
+        res = self.mod.hooks.run("probe", "usb-devices", {"vids": self.vids, "env": env, "network": network},
+                                 timeout=30)
         return {d["usb"]: d for d in res.data.get("devices", [])}
 
     def plan(self) -> dict[str, Any]:
@@ -502,6 +506,13 @@ def _unique(name: str, taken: set) -> str:
     return f"{name}-{n}"
 
 
+def _host_fields(mod) -> tuple[dict[str, str], dict[str, Any]]:
+    """The host env/network a hook request carries (tests use a stand-in module without them)."""
+    ctx = getattr(mod, "ctx", None)
+    network = mod.network() if callable(getattr(mod, "network", None)) else {}
+    return dict(getattr(ctx, "env", {}) or {}), network
+
+
 def identify_board(mod, usb: str | None, in_download: bool, soc: str | None, console_log: str | None, log: Log) -> dict[str, Any]:
     """Run the SoC profile's identify sequence on a board in download mode; {} when it cannot run (says why)."""
     prof = mod.socs.get(soc)
@@ -511,7 +522,9 @@ def identify_board(mod, usb: str | None, in_download: bool, soc: str | None, con
     if why:
         log(f"identify skipped: {why}")
         return {}
-    req = {"usb": usb, "fastboot": mod.fastboot_bin, "soc": soc, "console_log": console_log, "profile": prof, "timeout": 60}
+    env, network = _host_fields(mod)
+    req = {"usb": usb, "fastboot": mod.fastboot_bin, "soc": soc, "console_log": console_log, "profile": prof,
+           "timeout": 60, "env": env, "network": network}
     try:
         res = mod.hooks.run("probe", "identify", req, timeout=180, log=log)
         return res.data if res.applicable else {}

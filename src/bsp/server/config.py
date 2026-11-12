@@ -7,6 +7,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ..core.env import resolve_refs
+from ..core.errors import InvalidRequest
+
 
 @dataclass
 class HostConfig:
@@ -19,6 +22,7 @@ class HostConfig:
     auth_token: str | None = None
     modules: dict[str, dict[str, Any]] = field(default_factory=dict)
     announce: dict[str, Any] | None = None   # registry this host announces itself to
+    env: dict[str, str] = field(default_factory=dict)   # values hooks receive (top-level `env:`)
 
     @property
     def config_dir(self) -> Path:
@@ -31,8 +35,15 @@ class HostConfig:
         p = Path(path).resolve()
         with open(p, encoding="utf-8") as f:
             raw = yaml.safe_load(f) or {}
+        # Any string written as `env:NAME` takes the value bsp-hostd runs with (top level, server,
+        # modules, ...); an unset variable refuses to start with a message naming it.
+        raw = resolve_refs(raw, f"host config {p}")
         host = raw.get("host") or {}
         srv = raw.get("server") or {}
+        env = raw.get("env") or {}
+        if not isinstance(env, dict):
+            raise InvalidRequest(f"{p}: `env:` must be a mapping of NAME: value",
+                                 hint="e.g. env: {BSP_SERIAL_LOG_DIR: /var/log/serial}")
         state_dir = Path(os.environ.get("BSP_STATE_DIR") or srv.get("state_dir") or "/var/lib/bsp")
         if not state_dir.is_absolute():
             state_dir = (p.parent / state_dir).resolve()
@@ -46,6 +57,7 @@ class HostConfig:
             auth_token=os.environ.get("BSP_TOKEN") or srv.get("auth_token") or None,
             modules={k: (v or {}) for k, v in (raw.get("modules") or {}).items()},
             announce=_announce(srv.get("announce")),
+            env={str(k): ("" if v is None else str(v)) for k, v in env.items()},
         )
 
 

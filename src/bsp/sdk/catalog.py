@@ -20,6 +20,7 @@ A method is `ready` (has steps) or `todo` (placeholder, explains what is missing
 
 from __future__ import annotations
 
+import re
 import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -37,6 +38,8 @@ BOOT_STATUS = ("ready", "todo")
 #            options: fail (regex), timeout, stall (s of silence = failure), nudge (s of silence ->
 #            press Enter, for prompts printed without a newline; never while a bootloader may
 #            take the key as "stop autoboot")
+# send       type one line on the console and optionally wait for a serial regex; the echoed
+#            command line itself never satisfies serial/fail (matching starts after the echo)
 # stage / continue / oem / flash / getvar   fastboot verbs on the DUT's USB path
 # settle     fixed hardware delay (documented `why`), the only sanctioned sleep
 # reset      plain reset (no FDL expectation)
@@ -45,8 +48,8 @@ BOOT_STATUS = ("ready", "todo")
 # boot-media boot the board's own media: a plain reset, or the SoC's media boot (dut/mediaboot.py)
 # `when: fdl-not-strapped` marks a step that needs the board to boot its media (the cold boot after a flash):
 # on a board whose FDL is strapped it runs through the media boot, or is skipped when there is none.
-STEP_KINDS = ("enter-fdl", "reset", "wait", "stage", "continue", "oem", "flash", "getvar", "settle", "hook",
-              "check", "boot-media")
+STEP_KINDS = ("enter-fdl", "reset", "wait", "send", "stage", "continue", "oem", "flash", "getvar", "settle",
+              "hook", "check", "boot-media")
 
 
 def _load_yaml(p: Path) -> dict[str, Any]:
@@ -310,6 +313,7 @@ class SdkCatalog:
             for s in steps:
                 if s.get("do") not in STEP_KINDS:
                     raise InvalidRequest(f"{p}: boot.{m}: unknown step {s.get('do')!r}", details={"kinds": STEP_KINDS})
+                _validate_step(p, m, s)
             boot[m] = BootMethod(m, status, steps, b.get("notes", ""), b.get("variants") or {})
         if d.get("workspace"):
             ws = self.workspaces.get(d["workspace"])
@@ -343,6 +347,25 @@ class SdkCatalog:
             raise NotFound(f"unknown sdk {sdk_id!r}",
                            hint=(f"did you mean: {', '.join(close)}? " if close else "")
                            + f"known: {', '.join(self.instances.names())}") from None
+
+
+def _validate_step(path: Path, method: str, step: dict[str, Any]) -> None:
+    """Checks a step's required fields where a wrong recipe would otherwise fail on hardware."""
+    if step.get("do") != "send":
+        return
+    text = step.get("text")
+    if not isinstance(text, str) or not text.strip():
+        raise InvalidRequest(f"{path}: boot.{method}: a send step needs a non-empty `text`",
+                             hint='e.g. {do: send, text: "reboot", serial: "login:"}')
+    if "\n" in text or "\r" in text:
+        raise InvalidRequest(f"{path}: boot.{method}: a send step types one line, but `text` has a line break",
+                             hint="put each line in its own send step")
+    for key in ("serial", "fail"):
+        if step.get(key):
+            try:
+                re.compile(str(step[key]))
+            except re.error as e:
+                raise InvalidRequest(f"{path}: boot.{method}: `{key}` is not a valid regex: {e}") from None
 
 
 def sharing(cat: "SdkCatalog", ws_id: str) -> list[str]:

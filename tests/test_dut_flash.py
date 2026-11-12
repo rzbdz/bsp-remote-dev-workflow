@@ -185,6 +185,13 @@ def test_flasher_choice_order(host):
 
 
 def test_flash_uploaded_package_runs_the_hook_with_progress(host):
+    # Host env, network and a product directory are in the hook's request; args expand from the env.
+    mod = host.app.state.hub.modules["dut"]
+    mod.network_cfg = {"board_subnet": "10.0.0.0/24", "host_address": "10.0.0.2",
+                       "export_address": "203.0.113.5"}
+    mod._network = None
+    mod.ctx.env.update({"BSP_TFTP_SERVER": "10.0.0.9", "BSP_SDK_OUTPUT": "/srv/sdk"})
+    mod.flash_cfg["args"] = {"tftp": "${BSP_TFTP_SERVER}/pkg", "fallback": "${NOPE:-none}"}
     data = _tgz({"pkg/fastboot.yaml": b"actions: []\n", "pkg/partition_universal.json": b"{}",
                  "pkg/rootfs.ext4": b"r" * 1000})
     sha = _sha(data)
@@ -207,6 +214,11 @@ def test_flash_uploaded_package_runs_the_hook_with_progress(host):
     assert req["files"] == ["fastboot.yaml", "partition_universal.json", "rootfs.ext4"]
     assert req["timeout"] == 3600
     assert req["usb"] == "usb:0-0" and req["dut"] == "mock-board" and req["artifacts"]["package"].endswith("pkg.tgz")
+    assert req["product_dir"] == req["package_dir"]              # the unpacked package is the product
+    assert req["env"] == {"BSP_TFTP_SERVER": "10.0.0.9", "BSP_SDK_OUTPUT": "/srv/sdk"}
+    assert req["network"] == {"board_subnet": "10.0.0.0/24", "host_address": "10.0.0.2",
+                              "export_address": "203.0.113.5", "console": "mock-board"}
+    assert req["args"] == {"tftp": "10.0.0.9/pkg", "fallback": "none"}
     assert not Path(req["package_dir"]).exists()                  # the unpacked copy is gone afterwards
     assert any(j["id"] == r["job"] and j["progress"] == 100 for j in _call(host, "job_list"))
 

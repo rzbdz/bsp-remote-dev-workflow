@@ -138,6 +138,7 @@ Steps run in order on the board host. Each is a mapping with `do:` and its optio
 | `getvar` | `name`, `match` | `fastboot getvar NAME`; fail unless it matches the regex |
 | `flash` | `partition`, `artifact`, `timeout` | `fastboot flash PARTITION FILE` |
 | `wait` | `serial`, `fastboot`, `fail`, `timeout`, `stall`, `nudge` | Wait for a console regex and/or a fastboot product regex. `fail`: regex that aborts; `stall`: seconds of console silence that count as failure; `nudge`: press Enter after that many quiet seconds (for prompts printed without a newline — not while a bootloader may treat a key as "stop autoboot") |
+| `send` | `text`, `serial`, `timeout`, `fail`, `stall`, `nudge` | Type one line on the console and, with `serial`, wait for that regex. Safe when the line itself matches the pattern: matching starts after the console's echo of the line. `fail`, `stall` and `nudge` mean what they do for `wait` |
 | `settle` | `seconds`, `why` | Fixed delay; state why |
 | `hook` | `kind`, `name`, `artifacts`, `args`, `timeout` | Run `hooks/KIND/NAME` (e.g. a vendor flash tool); see [hooks/README.md](../hooks/README.md) |
 | `check` | `serial`, `why` | The console since the last action (a reset, a `continue`) matches a regex; otherwise stop |
@@ -152,6 +153,11 @@ Common to every step:
   (`bsp dut boot … --variant VARIANT`);
 - `only_if: VARIANT` / `unless: VARIANT` — run the step only in that variant, or only outside it, so a
   variant can swap part of the recipe (another flasher, say) while the default stays as it is.
+
+A `hook` step's request carries, besides the DUT and its artifacts, the host config's `env`,
+its derived `network`, and the resolved `product_dir` along with `sdk` and `artifacts_dir`.
+Strings in `args` expand `${NAME}` / `${NAME:-default}` from the host env (see
+[configuration.md](configuration.md#host-environment)).
 
 Before running, the host fetches every artifact the recipe refers to from the build server over
 ssh and caches it by checksum, so unchanged files are not copied again.

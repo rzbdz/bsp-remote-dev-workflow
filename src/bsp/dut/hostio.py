@@ -164,6 +164,12 @@ class SerialConsole:
              timeout: float, stall: float | None = None, nudge: float | None = None) -> str:
         """Wait for `pattern` in the log after `mark`. Raises on `fail` match or timeout.
         `nudge`: press Enter whenever the console has been quiet that many seconds."""
+        return self._wait(mark, pattern, fail, timeout, stall, nudge)
+
+    def _wait(self, mark: tuple[Path, int], pattern: str | None, fail: str | None,
+              timeout: float, stall: float | None = None, nudge: float | None = None,
+              after: Callable[[str], str] | None = None) -> str:
+        """`after` trims the console text before matching (send uses it to skip the echoed line)."""
         rx = re.compile(pattern) if pattern else None
         frx = re.compile(fail) if fail else None
         deadline = time.monotonic() + timeout
@@ -171,6 +177,8 @@ class SerialConsole:
         last_nudge = last_move
         while True:
             text = self.read_since(mark)
+            if after is not None:
+                text = after(text)
             if frx and frx.search(text):
                 m = frx.search(text)
                 ctx = text[max(0, m.start() - 400): m.end() + 200]
@@ -192,6 +200,31 @@ class SerialConsole:
                                       details={"console_tail": text[-800:]})
             time.sleep(0.25)
 
+    def send(self, text: str, pattern: str | None = None, fail: str | None = None, timeout: float = 60,
+             stall: float | None = None, nudge: float | None = None) -> dict[str, Any]:
+        """Send one line to the console and, with `pattern`, wait for it.
+
+        The console log holds both the board's echo of the line and what the line made it
+        print, and the line itself may match `pattern` (`send: "echo READY"`, wait: "READY").
+        Matching therefore starts after the echoed line: an echo of the text is found in the
+        log since the send and everything up to and including its newline is skipped. With
+        echo disabled (no such line in the log) the text since the send is matched as it is.
+        """
+        if not text.strip():
+            raise InvalidRequest("nothing to send", hint="`text` is the line to type on the console")
+        if "\n" in text or "\r" in text:
+            raise InvalidRequest("a send step types one line", hint="put each line in its own send step")
+        mark = self.mark()
+        r = _run([self.smtty, self.alias, "--send", text], timeout=max(15.0, min(timeout, 60.0)))
+        if r.returncode != 0:
+            raise HardwareError(f"smtty failed (rc={r.returncode}): {(r.stderr or r.stdout).strip()[-300:]}",
+                                hint=f"is serial-mux alias '{self.alias}' running? `serial-mux list` on the host")
+        if pattern is None:
+            return {"sent": text, "output": self.read_since(mark)}
+        matched = self._wait(mark, pattern, fail, timeout, stall, nudge,
+                             after=lambda raw: _after_echo(raw, text))
+        return {"sent": text, "output": _after_echo(matched, text)}
+
     def run(self, command: str, expect: str, timeout: float) -> dict[str, Any]:
         """Send one line, wait for `expect`, return the console text it produced."""
         if not command.strip():
@@ -211,6 +244,16 @@ class SerialConsole:
 
 
 _TS = re.compile(r"^\[\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\] ?")
+
+
+def _after_echo(text: str, command: str) -> str:
+    """The console text after the line that echoes `command` (all of it when no echo is in it)."""
+    i = text.find(command)
+    if i < 0:
+        return text
+    rest = text[i + len(command):]
+    nl = rest.find("\n")
+    return rest[nl + 1:] if nl >= 0 else rest
 
 
 def _strip_console(out: str, command: str) -> str:
