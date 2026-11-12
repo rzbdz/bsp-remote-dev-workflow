@@ -215,7 +215,13 @@ class Instance:
             s = dict(s)
             if variant and s.get("stop_if") == variant:
                 break
-            s.pop("stop_if", None)
+            # A variant can also swap steps: `only_if: <variant>` runs only in it, `unless: <variant>` only outside it.
+            if "only_if" in s and s["only_if"] != variant:
+                continue
+            if "unless" in s and s["unless"] == variant:
+                continue
+            for key in ("stop_if", "only_if", "unless"):
+                s.pop(key, None)
             if "artifact" in s:
                 s["file"] = arts.get(s["artifact"])
             steps.append(s)

@@ -149,7 +149,9 @@ Common to every step:
   flashing). On boards whose FDL is strapped a `reset` step goes through the SoC's `media_boot`
   ([porting.md](porting.md)); without one these steps are skipped and the log says why;
 - `stop_if: VARIANT` — end the recipe here when that variant was requested
-  (`bsp dut boot … --variant VARIANT`).
+  (`bsp dut boot … --variant VARIANT`);
+- `only_if: VARIANT` / `unless: VARIANT` — run the step only in that variant, or only outside it, so a
+  variant can swap part of the recipe (another flasher, say) while the default stays as it is.
 
 Before running, the host fetches every artifact the recipe refers to from the build server over
 ssh and caches it by checksum, so unchanged files are not copied again.
