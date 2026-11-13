@@ -791,12 +791,13 @@ class DutModule(Module):
 
     def probe(self, pins: str | None, consoles: str | None, identify: bool, sdks: str | None,
               dry_run: bool, human: bool = False, rounds: int = 8, wait_s: float = 120,
-              register_found: bool = False, known: bool = False) -> dict[str, Any]:
+              register_found: bool = False, known: bool = False, prefer: str | None = None) -> dict[str, Any]:
         from .probe import Prober
 
         prober = Prober(self, pins=pins, consoles=consoles, identify=identify,
                         default_sdks=[s for s in (sdks or "").split(",") if s] or None,
-                        human=human, rounds=rounds, wait_s=wait_s, register=register_found, known=known)
+                        human=human, rounds=rounds, wait_s=wait_s, register=register_found, known=known,
+                        prefer=prefer)
         if dry_run:
             return prober.plan()
         job = self.ctx.jobs.start("probe", f"{self.ctx.host_id}: probe", prober.run, host=self.ctx.host_id)

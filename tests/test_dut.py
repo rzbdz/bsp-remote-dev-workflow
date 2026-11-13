@@ -361,7 +361,8 @@ def test_human_backend_detects_the_board_itself_and_times_out():
 
 
 def test_human_probe_pairs_the_console_that_speaks_with_the_usb_port_that_appears(tmp_path, monkeypatch):
-    """No GPIO: a person resets boards one at a time; each round pairs a console and a USB port."""
+    """No GPIO: each board first boots normally, then a person resets it into download mode; the console and the USB
+    port that appear together are paired."""
     import types
 
     from bsp.core.hooks import HookRunner as _H  # noqa: F401 - the real hooks are replaced below
@@ -372,7 +373,8 @@ def test_human_probe_pairs_the_console_that_speaks_with_the_usb_port_that_appear
     for d in logs.values():
         d.mkdir()
     usb = {"usb:1-1": {"usb": "usb:1-1", "devnum": 3, "product": "hub"}}
-    script = [("con-b", "usb:2-1.4"), ("con-a", "usb:2-1.2")]
+    order = ["con-b", "con-a"]                     # the boards a person works through, in turn
+    ports = {"con-b": "usb:2-1.4", "con-a": "usb:2-1.2"}
 
     class Hooks:
         def run(self, kind, name, req, timeout=0, log=None):
@@ -388,20 +390,33 @@ def test_human_probe_pairs_the_console_that_speaks_with_the_usb_port_that_appear
         ctx=types.SimpleNamespace(host_id="lab-9", service=lambda name: (_ for _ in ()).throw(NotFound("no gpio"))),
         _event=lambda topic, **d: events.append(d))
     lines = []
-    sleeps = {"n": 0}
+    clock = {"t": 0.0}
+    acted = set()                                   # (board index, "boot" | "fdl")
 
     def fake_sleep(s):
-        # a person reacts during the first poll of each round
-        sleeps["n"] += 1
-        if script and sleeps["n"] % 10 == 1:
-            con, port = script.pop(0)
-            from datetime import date
+        clock["t"] += s
+        if not lines:
+            return
+        from datetime import date
 
-            (logs[con] / f"{date.today().isoformat()}.log").open("a").write("ROMB: hello\nROMB: usb2 init\nxx download handler\n")
+        asked = lines[-1]
+        import re as _re
+        found = _re.search(r"\(board (\d+)\)", asked)
+        if not found:
+            return
+        k = int(found.group(1)) - 1                # the board the instruction is for
+        if asked.startswith("ACTION NEEDED (board") and "start normally" in asked and (k, "boot") not in acted:
+            acted.add((k, "boot"))
+            (logs[order[k]] / f"{date.today().isoformat()}.log").open("a").write(
+                "U-Boot SPL 2022.10\nStarting kernel ...\nlogin: ")
+        elif "hold its BOOT" in asked and (k, "fdl") not in acted:
+            acted.add((k, "fdl"))
+            con, port = order[k], ports[order[k]]
+            (logs[con] / f"{date.today().isoformat()}.log").open("a").write(
+                "ROMB: hello\nROMB: usb2 init\nxx download handler\n")
             usb[port] = {"usb": port, "devnum": 9, "product": "DFU download"}
 
-    clock = {"t": 0.0}
-    monkeypatch.setattr(probe_mod.time, "sleep", lambda s: (fake_sleep(s), clock.__setitem__("t", clock["t"] + s)))
+    monkeypatch.setattr(probe_mod.time, "sleep", fake_sleep)
     monkeypatch.setattr(probe_mod.time, "monotonic", lambda: clock["t"])
     p = probe_mod.Prober(mod, None, None, identify=False, default_sdks=None, human=True, rounds=5, wait_s=10)
     res = p.run(lines.append)
@@ -409,8 +424,64 @@ def test_human_probe_pairs_the_console_that_speaks_with_the_usb_port_that_appear
     assert [(s["console"]["alias"], s["fastboot"]["usb"], s["control"]["backend"]) for s in specs] == [
         ("con-b", "usb:2-1.4", "human"), ("con-a", "usb:2-1.2", "human")]
     assert all(s["soc"] == "soc-b" and s["probed"]["human"] for s in specs)
+    assert all(s["control"]["fdl"]["strategy"] == "button" for s in specs)   # BOOT+RESET, not a strapped reset
     assert res["unmatched_consoles"] == []
-    assert sum("ACTION NEEDED" in l for l in lines) == 2 and events[0]["dut"] == "probe@lab-9"
+    # Two steps per board, and each asks the page to notify a person.
+    assert sum("ACTION NEEDED" in line for line in lines) == 4
+    assert [e["action"] for e in events[:4]] == ["boot normally", "enter download mode", "boot normally", "enter download mode"]
+    assert all(e["dut"] == "probe@lab-9" for e in events)
+
+
+def test_human_probe_starts_from_a_running_board_not_one_already_in_download_mode(tmp_path, monkeypatch):
+    """A board left in download mode would match at once; the first step asks for a normal boot instead."""
+    import types
+
+    from bsp.dut import probe as probe_mod
+    from bsp.dut.socs import SocProfiles
+
+    logdir = tmp_path / "logs" / "con-a"
+    logdir.mkdir(parents=True)
+    usb = {"usb:1-1": {"usb": "usb:1-1", "devnum": 3, "product": "hub"}}
+
+    class Hooks:
+        def run(self, kind, name, req, timeout=0, log=None):
+            if name == "consoles":
+                return types.SimpleNamespace(data={"consoles": [{"id": "con-a", "kind": "serial-mux", "alias": "con-a",
+                                                                 "device": "/dev/con-a", "log": str(logdir)}]})
+            return types.SimpleNamespace(data={"devices": list(usb.values())})
+
+    mod = types.SimpleNamespace(
+        probe_cfg={}, socs=SocProfiles([ROOT / "examples" / "site" / "socs"]), hooks=Hooks(), boards={},
+        serial_log_dir=str(tmp_path / "logs"), fastboot_bin="fastboot",
+        ctx=types.SimpleNamespace(host_id="lab-9", service=lambda name: (_ for _ in ()).throw(NotFound("no gpio"))),
+        _event=lambda topic, **d: None)
+    lines, clock, state = [], {"t": 0.0}, {"step": 0}
+
+    def write(text):
+        from datetime import date
+
+        (logdir / f"{date.today().isoformat()}.log").open("a").write(text)
+
+    def fake_sleep(s):
+        clock["t"] += s
+        asked = lines[-1] if lines else ""
+        if "start normally" in asked and state["step"] == 0:
+            state["step"] = 1
+            write("xx download handler\n")          # already in download mode: does not count as a normal boot
+        elif "start normally" in asked and state["step"] == 1 and clock["t"] > 5:
+            state["step"] = 2
+            write("U-Boot SPL 2022.10\nStarting kernel ...\n")   # the person reset it normally
+        elif "hold its BOOT" in asked and state["step"] == 2:
+            state["step"] = 3
+            write("ROMB: hello\nxx download handler\n")
+            usb["usb:2-1.2"] = {"usb": "usb:2-1.2", "devnum": 9, "product": "DFU download"}
+
+    monkeypatch.setattr(probe_mod.time, "sleep", fake_sleep)
+    monkeypatch.setattr(probe_mod.time, "monotonic", lambda: clock["t"])
+    res = probe_mod.Prober(mod, None, None, identify=False, default_sdks=None, human=True, rounds=1, wait_s=10).run(lines.append)
+    assert [x["spec"]["console"]["alias"] for x in res["proposals"]] == ["con-a"]
+    assert any("started in download mode and booted normally" in line for line in lines)
+    assert sum("ACTION NEEDED" in line for line in lines) == 2
 
 
 def test_enter_fdl_accepts_a_board_already_in_download_mode(tmp_path):
@@ -630,3 +701,17 @@ def test_an_sdk_recipes_hook_step_gets_the_boards_soc_images(tmp_path):
         .run(sdk, "download", None, lambda m: None)
     assert seen["images"] == {"tool-a-amd64": "/site/.blobs/x/tool"}
     assert seen["artifacts"] == {"flash-zip": "/out/p.zip"}
+
+
+def test_preferred_gpio_numbers_are_read_however_they_are_typed():
+    """`--prefer` takes what people actually write: spaces, Chinese commas, 、, ;, GPIO12, gpio_13, P15, 引脚16."""
+    from bsp.dut.probe import pin_numbers
+
+    for typed in ("12, 13", "12，13", "12、13", "12;13", "12 13", "GPIO12 gpio_13 P15 pin 16 引脚17",
+                  "GPIO 18、GPIO_19\n20"):
+        numbers = pin_numbers(typed)
+        assert numbers == sorted(set(numbers)), (typed, numbers)
+    assert pin_numbers("12, 13") == [12, 13]
+    assert pin_numbers("GPIO 12、gpio_13; P14，引脚15") == [12, 13, 14, 15]
+    assert pin_numbers("gpio_12 gpio_12") == [12]
+    assert pin_numbers("") == [] and pin_numbers(None) == []

@@ -492,7 +492,7 @@ def probe(fleet: Fleet, args) -> tuple[Any, str]:
     params = {"pins": args.pins, "consoles": consoles, "identify": not args.no_identify,
               "sdks": args.sdks, "dry_run": args.dry_run, "human": args.human, "rounds": args.rounds,
               "wait_s": args.wait, "register_found": bool(args.register or (args.yes and not args.dry_run)),
-              "known": args.known}
+              "known": args.known, "prefer": args.prefer}
     if args.human and len(fleet.require()) > 1:
         raise InvalidRequest("a human probe asks a person to reset boards on one host at a time",
                              hint=f"pick the host with -r ({', '.join(h.id for h in fleet.hosts())})")
@@ -639,6 +639,8 @@ def add_parsers(sub) -> None:
     sub.add_parser("init", help="first-run check: mode (local/remote), reachable hosts, next steps")
     p = sub.add_parser("probe", help="discover boards on the host(s): reset lines, consoles, USB, identity")
     p.add_argument("--pins", help="candidate reset pins, e.g. P33,P11")
+    p.add_argument("--prefer", help="try these header GPIOs first: numbers as written on the board, e.g. '12,13', "
+                                    "'GPIO12、gpio_13' (spaces, commas, Chinese commas, 、, ;, P12 and 引脚12 all work)")
     p.add_argument("--consoles", help="candidate consoles (serial-mux alias or /dev/tty*)")
     p.add_argument("--sdks", help="sdks the found boards run (default per SoC)")
     p.add_argument("--no-identify", action="store_true", help="skip booting U-Boot to read the board identity")
@@ -753,8 +755,8 @@ def add_parsers(sub) -> None:
     bd.add_argument("--board", default="", help="board model, free text")
     bd.add_argument("--description", default="")
     bd.add_argument("--sdks", default="", help="comma list (default: every SDK of its SoC)")
-    bd.add_argument("--fdl", choices=["strapped", "button"], default="strapped",
-                    help="strapped: a reset enters download mode; button: the person also holds BOOT/download")
+    bd.add_argument("--fdl", choices=["strapped", "button"], default="button",
+                    help="button (default): the person also holds BOOT/download; strapped: a reset enters download mode")
     bd.add_argument("--host", help="board host the console and USB are attached to (needed with several hosts)")
     bd.add_argument("--replace", action="store_true", help="overwrite an existing DUT with this name")
     b = ds.add_parser("boot", help="boot an SDK (--method load: RAM boot | download: flash), "

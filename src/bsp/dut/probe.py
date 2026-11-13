@@ -4,7 +4,8 @@ Every console on the host is a slot (see slots.py); probing finds the board on e
 
   candidates   consoles: the online slots without a DUT (or those named with --slots); a slot whose adapter
                          is gone is skipped. Without slots: hooks/probe/consoles (serial-mux aliases + raw ttys)
-               pins   : free header GPIOs from the gpio_relay service, ordered by `probe.pin_order`:
+               pins   : free header GPIOs from the gpio_relay service, those named with --prefer first, then by
+                         `probe.pin_order`:
                          `history` (lines a slot had before: re-cabled or re-registered boards come back first),
                          `relay` (lines already set up as relays or buttons), then `number`
                usb     : hooks/probe/usb-devices (download-mode vendor ids)
@@ -23,11 +24,13 @@ A line that made several consoles speak at once is pressed again once every othe
 a board that happened to print, no longer costs the board its reset line.
 
 With `human`, boards without reset wiring are found instead: no pin is pulsed.
-Each round asks a person to put one unregistered board into download mode
-(press RESET; hold BOOT too where download mode is not strapped). The console
-that speaks and the USB port that enumerates in that round belong together and
-become a slot with the `human` control backend, like `bsp dut bind`. A round in
-which nothing happens ends the probe.
+Each board takes two steps, in the order a person works: first the board is
+booted normally (RESET without BOOT) and its console watched for its own system,
+so a board already sitting in download mode cannot match by accident; then it is
+reset into download mode (hold BOOT/download, press RESET, release) and the
+console that speaks with the USB port that enumerates become one slot with the
+`human` control backend, like `bsp dut bind`. A round in which nothing happens
+ends the probe.
 
 Without `register`, nothing is registered by the probe job itself.
 """
@@ -86,13 +89,36 @@ class _RawTtyWatcher:
         os.close(self.fd)
 
 
+_PIN = re.compile(r"^(?:gpio|p|pin|引脚)[\s_\-]*(\d+)$|^(\d+)$", re.I)
+
+
+def pin_numbers(text: str | None) -> list[int]:
+    """GPIO numbers from what a person typed, however it was typed.
+
+    `12,13`, `12，13`, `12、13`, `12; 13`, one per line, `GPIO12`, `gpio_13`, `P15`, `pin 16`, `引脚17`, or bare numbers:
+    anything that is not a letter, digit or underscore separates, and the `GPIO`/`P`/`引脚` prefix may be attached
+    with a space, an underscore or not at all. Duplicates and out-of-range values are dropped; order is kept.
+    """
+    out: list[int] = []
+    for token in re.split(r"[^0-9A-Za-z_\u4e00-\u9fff]+", text or ""):
+        found = _PIN.match(token)
+        if not found:
+            continue
+        number = int(found.group(1) or found.group(2))
+        if 0 <= number <= 999 and number not in out:
+            out.append(number)
+    return out
+
+
 class Prober:
     def __init__(self, mod, pins: str | None, consoles: str | None, identify: bool,
                  default_sdks: list[str] | None, human: bool = False, rounds: int = 8, wait_s: float = 120,
-                 register: bool = False, known: bool = False):
+                 register: bool = False, known: bool = False, prefer: str | None = None):
         self.mod = mod
         self.cfg = mod.probe_cfg
         self.want_pins = [p.strip() for p in (pins or "").split(",") if p.strip()]
+        # What the person filled in ("the boards are on GPIO 12 and 13"): tried before every other line.
+        self.prefer_pins = pin_numbers(prefer)
         self.want_consoles = [c.strip().rsplit("/", 1)[-1] for c in (consoles or "").split(",") if c.strip()]
         self.register, self.known = register, known
         self.pin_order = list(self.cfg.get("pin_order") or ["history", "relay", "number"])
@@ -163,7 +189,8 @@ class Prober:
                 elif k == "number":
                     keys.append(p["number"])
             return tuple(keys)
-        out.sort(key=rank)
+        # Lines the person named come first, whatever the host's usual order says.
+        out.sort(key=lambda p: (p.get("number") not in self.prefer_pins, rank(p)))
         return out
 
     def candidate_consoles(self, log: Log) -> list[dict[str, Any]]:
@@ -377,22 +404,69 @@ class Prober:
         return self._result(proposals, pending, [])
 
     def _human_round(self, n: int, pending: dict, raw: dict, registered: set, log: Log):
+        """One board, in the order a person works: boot it normally first, then reset it into download mode.
+
+        The first step is what makes the pairing trustworthy: a board that is already in download mode would
+        otherwise match the moment the round starts, without anyone having pressed anything. So ask for a normal
+        boot and watch the console until it shows one (boards with a silent console go on after the wait).
+        """
+        def collect(texts: dict[str, str]) -> dict[str, str]:
+            for cid in pending:
+                texts[cid] += raw[cid].take().decode("utf-8", "replace") if cid in raw else ""
+            return {cid: (texts[cid] if cid in raw else self._read(c, marks[cid])) for cid, c in pending.items()}
+
+        # 1. a normal boot, not download mode
+        marks = {cid: self._mark(c) for cid, c in pending.items()}
+        for w in raw.values():
+            w.take()
+        texts = {cid: "" for cid in pending}
+        log(f"ACTION NEEDED (board {n}): let the board start normally first: press RESET and do NOT hold BOOT. "
+            f"If it is in download mode, reset it normally once. Waiting for its own system to boot.")
+        self.mod._event("attention", dut=f"probe@{self.mod.ctx.host_id}", action="boot normally",
+                        message=f"probe: reset the board normally (without BOOT) and let it boot (board {n})")
+        baseline = {cid: "unknown" for cid in pending}
+        started = {cid: False for cid in pending}   # it first printed download mode
+        seen = {cid: 0 for cid in pending}          # what of the console has been classified already
+        deadline = time.monotonic() + self.wait_s
+        while time.monotonic() < deadline:
+            time.sleep(0.5)
+            chunks = collect(texts)
+            for cid, text in chunks.items():
+                fresh = text[seen[cid]:]
+                seen[cid] = len(text)
+                if not fresh.strip():
+                    continue
+                # What came last decides: a board reset out of download mode prints a normal boot after the ROM's.
+                if self.socs.in_download_mode(fresh, ""):
+                    baseline[cid] = "download"
+                    started[cid] = True
+                elif self.socs.looks_like_boot(fresh):
+                    baseline[cid] = "normal"
+            if all(state == "normal" for state in baseline.values()):
+                break
+        still = [cid for cid, state in baseline.items() if state == "download"]
+        if still:
+            log(f"board {n}: console {', '.join(still)} still shows download mode; boot it normally (RESET without BOOT), "
+                f"then follow the next instruction")
+        elif any(started.values()):
+            log(f"board {n}: it started in download mode and booted normally after the reset; "
+                f"the earlier download-mode lines are not counted as a boot")
+
+        # 2. the download-mode reset, watched for the console and the USB port that appear together
         marks = {cid: self._mark(c) for cid, c in pending.items()}
         for w in raw.values():
             w.take()
         texts = {cid: "" for cid in pending}
         before = self.usb_snapshot()
-        log(f"ACTION NEEDED (board {n}): put ONE unregistered board on {self.mod.ctx.host_id} into download mode: "
-            f"press its RESET (hold its BOOT/download button too unless download mode is strapped), then wait")
+        log(f"ACTION NEEDED (board {n}): now put the board into download mode: hold its BOOT/download button, "
+            f"press RESET, then release both.")
         self.mod._event("attention", dut=f"probe@{self.mod.ctx.host_id}", action="enter download mode",
-                        message=f"probe: put one unregistered board into download mode (board {n})")
+                        message=f"probe: hold BOOT/download, press RESET and release, so the board enters download mode (board {n})")
         deadline, settle_until = time.monotonic() + self.wait_s, None
         while True:
             time.sleep(0.5)
-            for cid, c in pending.items():
-                texts[cid] += raw[cid].take().decode("utf-8", "replace") if cid in raw else ""
-            spoke = {cid: (texts[cid] if cid in raw else self._read(c, marks[cid])) for cid, c in pending.items()}
-            spoke = {cid: t for cid, t in spoke.items() if t.strip() and self.socs.looks_like_boot(t)}
+            chunks = collect(texts)
+            spoke = {cid: text for cid, text in chunks.items() if text.strip() and self.socs.looks_like_boot(text)}
             after = self.usb_snapshot()
             changed = [u for u, d in after.items() if u not in registered
                        and (u not in before or before[u].get("devnum") != d.get("devnum"))]
@@ -405,7 +479,7 @@ class Prober:
             return None, False
         if len(spoke) != 1:
             log(f"round {n}: {'no console reacted' if not spoke else 'several consoles reacted: ' + ', '.join(spoke)}"
-                f"; usb {changed or 'none'} — try again with one board at a time")
+                f"; usb {changed or 'none'} — try again, one board at a time")
             return None, True
         cid, text = next(iter(spoke.items()))
         fdl = self.socs.in_download_mode(text, " ".join(after[u].get("product", "") for u in changed))
@@ -455,7 +529,7 @@ class Prober:
                          # A reset that did not land in download mode: the board needs an FDL line nobody has found
                          # yet, or its strap is the other way; a person says which (`bsp dut set --fdl`).
                          "fdl": {"strategy": "strapped" if hit["fdl"] else "unset"}} if hit["pin"] else
-                        {"backend": "human", "fdl": {"strategy": "strapped"}}),
+                        {"backend": "human", "fdl": {"strategy": "button"}}),
             "sdks": sdks,
             "identity": ident,
             "probed": {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "gpio": hit["pin"]["label"] if hit["pin"] else None,
