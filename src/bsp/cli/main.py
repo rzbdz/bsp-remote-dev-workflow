@@ -155,9 +155,14 @@ def _client_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _emit(g, result: Any, text: str | None) -> None:
+def _emit(g, result: Any, text: str | None, warnings: list[str] | None = None) -> None:
     if g.json:
-        print(json.dumps({"ok": True, "result": result}, indent=2, ensure_ascii=False, default=str))
+        # `warnings` is what the human output adds after the result (hosts unreachable, a host without the module):
+        # without it, JSON and text told different stories and the exit code said everything was fine.
+        body: dict[str, Any] = {"ok": True, "result": result}
+        if warnings:
+            body["warnings"] = warnings
+        print(json.dumps(body, indent=2, ensure_ascii=False, default=str))
     elif text is not None:
         print(text.rstrip("\n"))
     else:
@@ -241,8 +246,10 @@ def main(argv: list[str] | None = None) -> int:
             return 130
         if isinstance(result, dutcli.Quiet):
             return result.rc
-        _emit(g, result, text)
-        return EXIT_OK
+        warnings = [f"{host} unreachable: {reason}" for host, reason in fleet.errors.items()]
+        _emit(g, result, text, warnings)
+        # The same exit code in both forms: hosts that could not be reached are not a success, even if the rest was.
+        return EXIT_UNREACHABLE if fleet.errors else EXIT_OK
 
     # ---------------- passthrough to host commands ----------------
     if rest[0] in ("watch", "tools") and any(a in ("-h", "--help") for a in rest[1:]):
