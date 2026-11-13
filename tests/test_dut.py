@@ -280,6 +280,32 @@ def test_soc_profiles_detect_and_layer_merge(tmp_path):
     assert "path" not in m["images"]["uboot"]                        # file not present in any layer
 
 
+def test_a_site_overlay_adds_media_boot_and_images_to_a_pack_profile(tmp_path):
+    """A site is an overlay: it writes only what it adds, the public pack supplies everything else."""
+    from bsp.dut import images
+    from bsp.dut.socs import SocProfiles
+
+    site = tmp_path / "socs" / "k3"
+    site.mkdir(parents=True)
+    (site / "soc.yaml").write_text(
+        "images:\n"
+        "  handoff: {file: media-handoff.bin, sha256: 'abababababababababababababababababababababababababababababababab', source: {url: 'https://example.org/x.bin'}}\n"
+        "media_boot:\n"
+        "  name: media-handoff\n"
+        "  steps: [{do: check, serial: 'sys: 0x'}, {do: stage, image: handoff}, {do: continue}]\n")
+    p = SocProfiles([ROOT / "packs" / "spacemit" / "socs", tmp_path / "socs"])
+    prof = p.get("k3")
+    # the pack's facts survive
+    assert prof["download_mode"]["fastboot"] == "DFU download"
+    assert prof["identify"]["fields"]["model"]
+    assert prof["images"]["fsbl"]["file"] == "FSBL.bin"
+    # and the site's additions are merged on top
+    assert prof["media_boot"]["name"] == "media-handoff"
+    assert prof["images"]["handoff"]["source"]["url"] == "https://example.org/x.bin"
+    plan = {row["image"]: row["state"] for row in images.plan(p, tmp_path)}
+    assert plan["handoff"] == "fetchable" and plan["fsbl"] == "missing"
+
+
 def test_common_boot_banners_count_as_a_boot_and_shell_chatter_does_not():
     from bsp.dut.socs import SocProfiles
 
