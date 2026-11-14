@@ -405,9 +405,9 @@ class DutModule(Module):
             return f"the boot ROM on the console (/{hit}/)" if hit else None
         return seen if fps else None
 
-    def confirm(self, dut: str, note: str) -> dict[str, Any]:
+    def confirm(self, dut: str, note: str, request: str | None = None) -> dict[str, Any]:
         self.board(dut)
-        return self.attention.confirm(dut, note or "")
+        return self.attention.confirm(dut, note or "", request or None)
 
     def boot(self, dut: str, sdk: str, method: str, variant: str | None, lease: str | None, brk: str | None = None) -> dict[str, Any]:
         b = self.board(dut)

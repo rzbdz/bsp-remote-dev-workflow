@@ -741,3 +741,78 @@ def test_preferred_gpio_numbers_are_read_however_they_are_typed():
     assert pin_numbers("GPIO 12、gpio_13; P14，引脚15") == [12, 13, 14, 15]
     assert pin_numbers("gpio_12 gpio_12") == [12]
     assert pin_numbers("") == [] and pin_numbers(None) == []
+
+
+def test_confirm_names_the_request_and_a_repeat_is_idempotent():
+    """A person clicks 「我做好了」 after bsp already saw the board arrive: the request id resolves to what it
+    answered, so the click is not an error and the page can say it was already confirmed."""
+    import threading
+
+    from bsp.dut.catalog import spec_from_dict as parse_spec
+    from bsp.dut.control import Attention, make_control
+
+    att = Attention()
+    spec = parse_spec({"id": "slot-1", "host": "h", "board": "b", "console": {"alias": "slot-1"},
+                       "fastboot": {"usb": "usb:1-1"}, "control": {"backend": "human"}})
+    ctl = make_control(spec, lambda name: att)
+    lines = []
+    seen = {"now": None}
+    t = threading.Thread(target=ctl.reset, args=(lines.append, lambda: seen["now"]))
+    t.start()
+    for _ in range(50):
+        if att.view("slot-1"):
+            break
+        time.sleep(0.02)
+    req = att.view("slot-1")["id"]
+    seen["now"] = "the boot ROM on the console"          # the board arrives before anyone clicks
+    t.join(5)
+    assert not t.is_alive()
+
+    again = att.confirm("slot-1", "clicked", request=req)
+    assert again["repeat"] and again["how"] == "detected" and again["request"] == req
+    # A second click on the same page button: still the same answer, never NotFound.
+    assert att.confirm("slot-1", "", request=req)["repeat"]
+
+    # An unknown request id is the one thing that is still an error, and it says what is waiting.
+    with pytest.raises(NotFound) as e:
+        att.confirm("slot-1", request="nope")
+    assert "not waiting" in e.value.message and "bsp dut status" in e.value.hint
+
+
+def test_confirm_without_a_request_answers_what_is_waiting_now():
+    import threading
+
+    from bsp.dut.catalog import spec_from_dict as parse_spec
+    from bsp.dut.control import Attention, make_control
+
+    att = Attention()
+    spec = parse_spec({"id": "slot-1", "host": "h", "board": "b", "console": {"alias": "slot-1"},
+                       "fastboot": {"usb": "usb:1-1"}, "control": {"backend": "human"}})
+    ctl = make_control(spec, lambda name: att)
+    t = threading.Thread(target=ctl.enter_fdl, args=(lambda line: None,))
+    t.start()
+    for _ in range(50):
+        if att.view("slot-1"):
+            break
+        time.sleep(0.02)
+    done = att.confirm("slot-1", "pressed")
+    assert done["confirmed"] == "enter download mode" and not done["repeat"] and done["request"]
+    t.join(5)
+    assert not t.is_alive()
+
+
+def test_a_repeated_ask_supersedes_the_older_one_and_a_click_on_it_is_answered():
+    """bsp asks again before a person answered (a second reset): a click on the first page button resolves to
+    'superseded', not to an error, and the newer request carries its own id."""
+    from bsp.dut.control import Attention
+
+    att = Attention()
+    first = att.request("slot-1", "reset", "press RESET")
+    second = att.request("slot-1", "reset", "press RESET")
+    assert first["id"] != second["id"]
+    assert att.view("slot-1")["id"] == second["id"]
+    old = att.confirm("slot-1", "clicked", request=first["id"])
+    assert old["repeat"] and old["how"] == "superseded" and old["request"] == first["id"]
+    att.confirm("slot-1", "clicked", request=second["id"])
+    after = att.confirm("slot-1", "", request=second["id"])
+    assert after["repeat"] and after["how"] == "by a person"

@@ -173,7 +173,12 @@ def dut_cmd(fleet: Fleet, args, book: LeaseBook) -> tuple[Any, str]:
         r = _ok(h, h.call("dut_cancel", {"dut": dut, "lease": _lease(args, book, dut)}))
         return r, f"{dut}: cancelling {', '.join(r['cancelled'])}; it ends before its next step"
     if c == "confirm":
-        r = _ok(h, h.call("dut_confirm", {"dut": dut, "note": " ".join(args.note or [])}))
+        r = _ok(h, h.call("dut_confirm", {"dut": dut, "note": " ".join(args.note or []), "request": args.request}))
+        if r.get("repeat"):
+            how = {"detected": "the board showed it on its own", "expired": "nobody did it in time",
+                   "superseded": "the board was asked again after it", "by a person": "confirmed by a person"}.get(
+                       r.get("how") or "by a person", r.get("how"))
+            return r, f"{dut}: nothing to confirm — request {r['request']} was already answered ({how}, {r['waited_s']}s)"
         return r, f"{dut}: confirmed '{r['confirmed']}' after {r['waited_s']}s; the waiting job continues"
     if c == "boot":
         out = sys.stderr if args.json else sys.stdout
@@ -620,7 +625,7 @@ def _status_text(d: dict[str, Any]) -> str:
         f"{d['id']} @ {d['host']}: {d['board']} ({d['soc']}) — {d['description']}",
         f"  stage    : {d['stage']}" + (f"  busy: {d['busy']}" if d.get("busy") else ""),
         *([f"  ACTION NEEDED: {d['needs_human']['message']} "
-           f"(waiting {d['needs_human']['waiting_s']}s; then `bsp dut confirm {d['id']}`)"] if d.get("needs_human") else []),
+           f"(waiting {d['needs_human']['waiting_s']}s; then `bsp dut confirm {d['id']} --request {d['needs_human']['id']}`)"] if d.get("needs_human") else []),
         f"  lease    : {l['holder']} ({l['expires_in_s']}s left)" if l else "  lease    : free",
         f"  fastboot : {d['fastboot'] or 'not on bus'} (usb {d['usb']})",
         f"  control  : {d['control_state']}",
@@ -746,6 +751,8 @@ def add_parsers(sub) -> None:
     cf = ds.add_parser("confirm", help="tell a waiting reset/boot that you did what it asked (human backend)")
     cf.add_argument("dut")
     cf.add_argument("note", nargs="*", help="optional note for the log, e.g. 'pressed reset'")
+    cf.add_argument("--request", help="request id from `bsp dut status` or the attention event; the same id twice is "
+                                      "idempotent, so a late click says it was already confirmed")
     bd = ds.add_parser("bind", help="register a board slot from a console + USB port only (no GPIO): "
                                     "resets are done by a person (human backend)")
     bd.add_argument("dut", help="name for the slot, e.g. flash-slot-1")

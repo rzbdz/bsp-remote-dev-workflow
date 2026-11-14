@@ -48,9 +48,14 @@ def build_commands(mod: "DutModule") -> list[Command]:
             render=lambda r: (f"{r['dut']}: waiting for a person, job {r['job']}" if r.get("job")
                               else "\n".join(r["log"]) + f"\nfastboot: {r['fastboot']}")),
         cmd("dut.confirm", "Tell a waiting reset/boot that the requested manual action is done "
-            "(human control backend)", mod.confirm,
-            [DUT, Param("note", help="what you did, for the log", required=False, default="")],
-            render=lambda r: f"{r['dut']}: confirmed '{r['confirmed']}' after {r['waited_s']}s"),
+            "(human control backend); naming the request makes a repeated confirmation say it already was",
+            mod.confirm,
+            [DUT, Param("note", help="what you did, for the log", required=False, default=""),
+             Param("request", help="the request id from `bsp dut status` / the attention event (repeats are idempotent)",
+                   required=False, positional=False)],
+            render=lambda r: (f"{r['dut']}: request {r['request']} was already answered"
+                              f" ({r.get('how') or 'by a person'}, {r['waited_s']}s)" if r.get("repeat")
+                              else f"{r['dut']}: confirmed '{r['confirmed']}' after {r['waited_s']}s")),
         cmd("dut.boot", "Boot an SDK: load = fastboot RAM boot, download = flash to media",
             mod.boot,
             [DUT, Param("sdk", help="sdk instance (bsp sdk list)", positional=False),
