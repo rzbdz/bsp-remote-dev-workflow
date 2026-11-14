@@ -39,7 +39,7 @@ from .config import HostConfig
 
 BUILTIN_MODULES = ["bsp.gpio_relay.module", "bsp.sdk.module", "bsp.dut.module", "bsp.registry.module"]
 WEB_DIR = Path(__file__).parent / "web"
-_PYTYPES = {"string": str, "integer": int, "number": float, "boolean": bool}
+_PYTYPES = {"string": str, "integer": int, "number": float, "boolean": bool, "array": list[str] | str}
 
 
 class CliLine(BaseModel):

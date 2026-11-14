@@ -146,20 +146,52 @@ def test_boot_files_stages_in_order_and_waits_for_the_port(host):
         shas.append(_sha(data))
     r = _call(host, "dut_boot_files", dut="mock-board", files=",".join(shas), lease=token, reset=False,
               first_wait=0, port_timeout=0.5)
-    assert r["job"] and [f["name"] for f in r["files"]] == ["FSBL.bin", "Image.itb"]
+    assert r["job"] and [f["path"] for f in r["files"]] == shas
     job = _call(host, "job_get", id=r["job"], wait=10)
+    assert job["status"] == "failed" and job["result"] is None
     # the fake port never comes back after the first stage: the boot stops before the kernel
     assert job["status"] == "failed" and "did not come back" in job["error"]["message"]
     staged = [l.rsplit("/", 1)[-1] for l in host.log.read_text().splitlines() if " stage " in l]
     assert staged == ["FSBL.bin"]
 
     (host.tmp / "off-bus").unlink()            # port back: now the whole sequence runs
-    r = _call(host, "dut_boot_files", dut="mock-board", files=",".join(shas), lease=token, reset=False,
-              first_wait=0, port_timeout=0.5)
-    threading.Timer(0.2, lambda: (host.tmp / "off-bus").unlink(missing_ok=True)).start()
-    job = _call(host, "job_get", id=r["job"], wait=10)
-    assert job["status"] == "succeeded", job
-    assert any("file 2/2 Image.itb: staged" in l for l in job["lines"])
+    shared = host.tmp / "shared" / "Image.itb"
+    shared.parent.mkdir()
+    shared.write_bytes(b"kernel from the board host")
+    import http.server
+
+    class Image(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            body = b"kernel by URL"
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Image)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        url = f"http://127.0.0.1:{server.server_port}/Image.itb?version=1,2"
+        refs = [shas[0], f"host:{shared}", url]
+        r = _call(host, "dut_boot_files", dut="mock-board", files=refs, lease=token, reset=False,
+                  first_wait=0, port_timeout=0.5)
+        assert r["files"] == [{"source": "sha256", "path": shas[0]}, {"source": "host", "path": str(shared)},
+                              {"source": "url", "path": url}]
+        threading.Timer(0.2, lambda: (host.tmp / "off-bus").unlink(missing_ok=True)).start()
+        threading.Timer(0.7, lambda: (host.tmp / "off-bus").unlink(missing_ok=True)).start()
+        job = _call(host, "job_get", id=r["job"], wait=10)
+        assert job["status"] == "succeeded", job
+        assert [f["sha256"] for f in job["result"]["files"]] == [shas[0], _sha(b"kernel from the board host"), _sha(b"kernel by URL")]
+        assert any("file 3/3 Image.itb: staged" in l for l in job["lines"])
+    finally:
+        server.shutdown()
+        server.server_close()
+    missing = _call(host, "dut_boot_files", dut="mock-board", files="host:/missing/Image.itb", lease=token)
+    job = _call(host, "job_get", id=missing["job"], wait=10)
+    assert job["status"] == "failed" and job["error"]["code"] == "not_found"
     assert _call(host, "dut_boot_files", dut="mock-board", files="", lease=token)["code"] == "invalid_request"
 
 

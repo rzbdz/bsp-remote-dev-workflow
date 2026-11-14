@@ -152,7 +152,9 @@ hook gets the same values whether it reads `req["env"]`, its own environment, or
 `modules.dut.product_dir` says where hooks on this host find a build's product. It may be a
 literal path, or a template with `{sdk}` (the SDK instance id) and `{artifacts_dir}` (the
 artifact directory on the build server); with no value the artifact directory itself is passed.
-`bsp dut flash` package hooks always get the unpacked package directory instead.
+`bsp dut flash` package hooks always get the unpacked package directory instead. This is an opaque path supplied to
+the hook: bsp does not mount Samba/CIFS, translate Windows/UNC paths, or redirect the SDK's SSH artifact pulls through
+it. A hook may run `scp` itself or use a share the site manages separately.
 
 `modules.dut.network` gives hooks the board network facts they would otherwise guess: the
 boards' DHCP subnet, this host's address there, and the address other machines use. Missing
@@ -241,11 +243,13 @@ console: {alias: example-board}  # serial-mux alias; add `device: /dev/ttyUSB0` 
                                  # `prompt: "# $"` to override the SDK's shell prompt
 fastboot: {usb: "usb:1-1.2"}     # the selector `fastboot devices -l` shows
 control:
-  backend: gpio-relay            # gpio-relay | human (alias: manual) | home-assistant (stub)
+  backend: gpio-relay            # actor: gpio-relay | human (alias: manual); it does not decide media boot
   reset: {pin: P33, mode: button, pulse_ms: 1000}
   fdl:
-    strategy: strapped           # strapped: every reset enters download mode
-                                 # button: hold `pin`, pulse reset, release
+    strategy: strapped           # topology, independent of actor:
+                                 # strapped: every reset enters FDL; media_boot is needed to boot the media
+                                 # button: on-demand FDL; a plain reset boots media, no media_boot wrapper
+                                 # unset: topology unknown; enter-fdl refuses to guess
     # pin: P35
     # expect: {console: "...", fastboot: "..."}   # override the SoC profile's download_mode
   human:                         # human backend only (all optional)

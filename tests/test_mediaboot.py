@@ -86,6 +86,27 @@ def image(tmp_path, data=IMAGE):
     return p
 
 
+def test_an_already_waiting_download_port_uses_its_existing_rom_evidence_without_a_reset(tmp_path):
+    # The person (or an earlier relay reset) already left this strapped board in FDL. No new banner arrives now:
+    # judging only the console text since this request would falsely reject the valid NOR download state.
+    b = Board()
+    b.out = BANNER
+    lines = []
+    r = MediaBoot(spec(), profile(image(tmp_path))).run(runner(b), lines.append)
+    assert b.calls == ["getvar rom-version", "stage handoff.bin", "continue"]
+    assert r["name"] == "rom handoff" and any("already present" in line for line in lines)
+
+
+def test_a_human_strapped_board_with_an_existing_banner_does_not_need_another_request(tmp_path):
+    # Human/relay is only how the action is performed; it must not change the media-boot decision.
+    s = spec()
+    s.control["backend"] = "human"
+    b = Board()
+    b.out = BANNER
+    MediaBoot(s, profile(image(tmp_path))).run(runner(b), lambda _line: None)
+    assert b.calls == ["getvar rom-version", "stage handoff.bin", "continue"]
+
+
 def test_a_strapped_board_boots_its_media_through_the_steps_its_soc_declares(tmp_path):
     b = Board()
     m = MediaBoot(spec(), profile(image(tmp_path)))

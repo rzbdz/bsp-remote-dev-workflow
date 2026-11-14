@@ -127,6 +127,7 @@ class Attention:
 
 
 class ControlBackend(ABC):
+    """The board's two control roles. `fdl.strategy` decides topology; a role's GPIO/human actor only performs it."""
     needs_human = False      # reset/enter_fdl block until a person acts (run them as jobs)
 
     def __init__(self, dut: DutSpec, services: Callable[[str], Any]):

@@ -115,6 +115,9 @@ CONF=$SITE/hosts/$ID.yaml
   # serial_log_dir, so that stays serial-mux's own.
   echo "    serial_log_dir: $(getent passwd root | cut -d: -f6)/.serial-mux/logs"
   echo "    fastboot: fastboot"
+  # Site hooks (possibly a scp/flashing step) take precedence over the generic pack hooks below them.
+  # Without this, a synced flash recipe names a hook the running host cannot find after every reinstall.
+  echo "    hook_dirs: [$SITE/hooks]"
   echo "    probe: {watch_s: 3.0, pulse_ms: 1000}"
 } > "$CONF.new"
 mv -f "$CONF.new" "$CONF"

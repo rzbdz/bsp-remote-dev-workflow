@@ -18,7 +18,7 @@ from typing import Any
 
 from ..core.commands import Command
 from ..core.env import expand
-from ..core.errors import Conflict, HardwareError, InvalidRequest, BspError
+from ..core.errors import Conflict, HardwareError, InvalidRequest, NotFound, BspError
 from ..core.hooks import HookRunner
 from ..core.module import MODULES, Module, ModuleContext
 from ..core.net import local_addresses
@@ -330,6 +330,9 @@ class DutModule(Module):
                           else _stage(fb, self.socs.download_mode(b.spec.soc).get("fastboot"))),
                 "needs_human": self.attention.view(dut),
                 "control_state": ctl, "console_tail": tail,
+            # Preserve which actor performs each role when a human coordinates an FDL button and a relay pulses reset.
+            "control": {"backend": b.spec.control.get("backend"), "reset": dict(b.spec.control.get("reset") or {}),
+                        "fdl": dict(b.spec.control.get("fdl") or {})},
                 "console_attach": f"{self.smtty} {b.console.alias}",     # interactive: run this on the host
                 "console_socket": str(self.consoles.socket(b.console.alias)),   # `bsp dut pipe` connects here
                 "console_up": self.consoles.up(b.console.alias), "slot": self.slot_of(dut),
@@ -493,27 +496,59 @@ class DutModule(Module):
         return {"dut": dut, "sha256": sha256, "file": path.name, "size": path.stat().st_size,
                 "continued": continued, "output": out}
 
-    def boot_files(self, dut: str, files: str, lease: str | None, reset: bool, first_wait: float,
+    def boot_files(self, dut: str, files: list[str], lease: str | None, reset: bool, first_wait: float,
                    later_wait: float, port_timeout: float) -> dict[str, Any]:
+        import hashlib
+        from pathlib import Path
+
         b = self.board(dut)
         self.leases.check(dut, lease)
         self._guard_busy(dut)
-        shas = [s.strip() for s in (files or "").split(",") if s.strip()]
-        if not shas:
-            raise InvalidRequest("no files to boot", hint="files = comma list of sha256 of uploaded files, in boot order")
-        items = []
-        for sha in shas:
-            p = self.store.get(sha)
-            items.append({"sha256": sha, "path": str(p), "name": p.name, "size": p.stat().st_size})
+        if not files:
+            raise InvalidRequest("no files to boot")
+        refs = []
+        for ref in files:
+            path = ref[5:] if ref.startswith("host:") else ref
+            source = "host" if ref.startswith("host:") else "url" if ref.startswith(("http://", "https://")) else "host" if ref.startswith("/") else "sha256"
+            refs.append({"source": source, "path": path})
+
+        def resolve(ref, log):
+            from . import flashpkg
+
+            source, path = ref["source"], ref["path"]
+            if source == "url":
+                # The board host fetches it under the job's busy guard; nothing travels through the caller.
+                got = flashpkg.fetch(self.store, flashpkg.check_url(path), None, log)
+                p, sha = Path(got["path"]), got["sha256"]
+            elif source == "host":
+                # A build product or share already on this host; hash what is actually read, like every other artifact.
+                p = Path(path)
+                if not p.is_absolute() or not p.is_file():
+                    raise NotFound(f"no such file on {self.ctx.host_id}: {path}",
+                                   hint="a path here, on the board host, not on the machine you are running the CLI on")
+                h = hashlib.sha256()
+                with p.open("rb") as f:
+                    for chunk in iter(lambda: f.read(1 << 20), b""):
+                        h.update(chunk)
+                sha = h.hexdigest()
+                if not p.stat().st_size:
+                    raise InvalidRequest(f"empty boot file on {self.ctx.host_id}: {path}")
+                log(f"host file {p.name}: sha256 {sha}")
+            else:
+                p, sha = self.store.get(path), path
+            return {"sha256": sha, "path": str(p), "name": p.name, "size": p.stat().st_size}
+
         runner = b.runner(self)
-        names = " ".join(i["name"] for i in items)
-        job = self._start_job(dut, f"boot files {names}",
-                              lambda log: runner.run_files(items, log, reset=reset, first_wait=first_wait,
-                                                           later_wait=later_wait, port_timeout=port_timeout),
-                              kind="boot", files=[i["sha256"] for i in items])
+        names = " ".join(Path(ref["path"]).name for ref in refs)
+
+        def body(log):
+            items = [resolve(ref, log) for ref in refs]
+            return runner.run_files(items, log, reset=reset, first_wait=first_wait,
+                                    later_wait=later_wait, port_timeout=port_timeout)
+
+        job = self._start_job(dut, f"boot files {names}", body, kind="boot", files=[ref["path"] for ref in refs])
         self._event("boot", dut=dut, files=names, job=job.id)
-        return {"job": job.id, "dut": dut, "files": [{k: i[k] for k in ("name", "sha256", "size")} for i in items],
-                "host": self.ctx.host_id}
+        return {"job": job.id, "dut": dut, "files": refs, "host": self.ctx.host_id}
 
     # -------------------------------------------------------------- flash --
     DEFAULT_FLASHER = "spacemit-pkg"
@@ -748,8 +783,21 @@ class DutModule(Module):
         if fields.get("usb"):
             raw["fastboot"]["usb"] = fields["usb"]
             changed.append("usb")
+        for role in ("reset", "fdl"):
+            if fields.get(f"{role}_actor") != "human":
+                continue
+            raw["control"].pop(role, None)
+            if role == "fdl":
+                raw["control"]["backend"] = "human"
+                raw["control"]["fdl"]["strategy"] = "button"
+            changed.append(f"{role}_actor")
         if fields.get("reset_pin"):
             raw["control"]["reset"]["pin"] = fields["reset_pin"]
+            # Both roles relay-driven means no human coordinator; otherwise a person handles FDL and this pin resets.
+            if spec.control.get("backend") == "human" and (raw["control"].get("fdl") or {}).get("pin"):
+                raw["control"]["backend"] = "gpio-relay"
+            elif spec.control.get("backend") != "human":
+                raw["control"]["backend"] = "gpio-relay"
             changed.append("reset_pin")
         if fields.get("pulse_ms"):
             raw["control"]["reset"]["pulse_ms"] = int(fields["pulse_ms"])

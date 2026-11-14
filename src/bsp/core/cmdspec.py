@@ -32,7 +32,7 @@ class Param:
         return self.required if self.positional is None else self.positional
 
     def json_schema(self) -> dict[str, Any]:
-        s: dict[str, Any] = {"type": self.type}
+        s: dict[str, Any] = {"type": "array", "items": {"type": "string"}} if self.type == "array" else {"type": self.type}
         if self.help:
             s["description"] = self.help
         if self.choices:
@@ -63,6 +63,17 @@ class Param:
                         raise ValueError
                 else:
                     value = bool(value)
+            elif self.type == "array":
+                # HTTP clients send a real list; the older CLI sent one JSON list or comma-separated values as a string.
+                if isinstance(value, str):
+                    text = value.strip()
+                    if text.startswith("["):
+                        import json
+                        value = json.loads(text)
+                    else:
+                        value = [v.strip() for v in text.split(",") if v.strip()]
+                if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+                    raise ValueError
             else:
                 value = str(value)
         except (TypeError, ValueError):

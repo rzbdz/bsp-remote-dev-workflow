@@ -101,21 +101,24 @@ download mode on its console or USB port (for a plain reset: the SoC's boot-ROM 
 console). If the board is not actually in download mode after a confirmation, the next step
 fails with a fastboot timeout. Scripts and agents should run such commands in the background.
 
-### Booting local files
+### Booting files
 
-`bsp dut boot DUT --files FSBL.bin u-boot-opensbi.itb Image.itb` boots a board from RAM with
-files from your machine. Each file is sent to the board host once (by sha256; unchanged files
-are not sent again, over HTTP or the ssh tunnel), then the host puts the board into download
-mode (skip with `--no-reset`) and for each file runs `fastboot stage` + `continue` and waits for
-the download port to come back before the next one: `--first-wait` seconds after the first file
-(default 8, while the boot ROM hands over), `--later-wait` after later ones (default 3), then up
-to `--port-timeout` more (default 20). If the port does not return, the boot stops and names the
-file. It runs as a background job like `--sdk` boots, with the path and sha256 of every file in
-the job log. Nothing is flashed.
+An SDK recipe is the normal way to boot its build: the board host pulls the artifacts from the build server over
+SSH/SCP, checks their sha256, and runs the recipe's commands and hooks. No image passes through the CLI or a registry.
 
-Programs can do the same over HTTP: `PUT /api/v1/artifacts/<sha256>?name=FILE` with the file as
-the body (checked against the sha256; `GET` the same URL to see whether it is cached), then
-`dut_stage` or `dut_boot_files` with the sha256 values.
+For files outside an SDK recipe, `bsp dut boot DUT --files FSBL.bin u-boot-opensbi.itb Image.itb` boots from RAM.
+Each input may be an `http(s)://` URL the board host downloads, `host:/absolute/path` for a file already on that host,
+or a local file. A local file is the upload fallback, sent once by sha256; absolute local paths still upload — the
+explicit `host:` prefix is what selects a board-host path. The host checks the content's sha256 for every input.
+
+The host puts the board into download mode (skip with `--no-reset`) and for each file runs `fastboot stage` +
+`continue`, waiting for the download port to come back: `--first-wait` after the first file (default 8), `--later-wait`
+after later ones (default 3), then up to `--port-timeout` more (default 20). The job log records every path and sha256.
+Nothing is flashed.
+
+Programs can upload the fallback with `PUT /api/v1/artifacts/<sha256>?name=FILE`, then pass its sha256 to `dut_stage`
+or `dut_boot_files`. `dut_boot_files.files` is a string array (a legacy JSON string or comma-separated list also works);
+URL and `host:` references bypass that upload.
 
 ### Flashing a package
 

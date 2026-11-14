@@ -91,9 +91,10 @@ def build_commands(mod: "DutModule") -> list[Command]:
              Param("timeout", "number", "seconds for the stage", required=False, default=300)],
             render=lambda r: f"{r['dut']}: staged {r['file']} ({r['size']:,} B)"
                              + (" and continued" if r["continued"] else "")),
-        cmd("dut.boot_files", "Boot from RAM with uploaded files in order (FSBL, U-Boot/OpenSBI, kernel)",
+        cmd("dut.boot_files", "Boot from RAM with files in order (FSBL, U-Boot/OpenSBI, kernel)",
             mod.boot_files,
-            [DUT, Param("files", help="comma list of sha256 of uploaded files, in boot order", positional=False),
+            [DUT, Param("files", type="array", help="list of uploaded sha256, http(s) URL or host:/absolute/path "
+                                                   "on this host, in boot order", positional=False),
              LEASE,
              Param("reset", "boolean", "enter download mode first", required=False, default=True),
              Param("first_wait", "number", "seconds before polling for the port after the first file",
@@ -157,6 +158,8 @@ def build_commands(mod: "DutModule") -> list[Command]:
              Param("sdks", help="comma list; empty string = all SDKs of its SoC", required=False, positional=False),
              Param("usb", help="fastboot selector, e.g. usb:2-1.4", required=False, positional=False),
              Param("reset_pin", help="header pin of the reset line, e.g. P26", required=False, positional=False),
+             Param("reset_actor", help="human (clear reset.pin); a GPIO pin switches to a relay", required=False, positional=False, choices=["human"]),
+             Param("fdl_actor", help="human (coordinate FDL and any reset relay)", required=False, positional=False, choices=["human"]),
              Param("pulse_ms", "integer", "reset pulse width", required=False, positional=False),
              Param("fdl", help="strapped | button | unset", required=False, positional=False, choices=["strapped", "button", "unset"]),
              Param("fdl_pin", help="header pin of the FDL line (fdl=button)", required=False, positional=False)],

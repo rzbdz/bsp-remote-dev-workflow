@@ -269,7 +269,9 @@ def _strip_console(out: str, command: str) -> str:
 # ------------------------------------------------------------ artifacts --
 class ArtifactStore:
     """Content-addressed cache of build outputs pulled from build servers over SSH.
-    Boot always reads local files (never CIFS)."""
+
+    The cache is local: bsp does not mount CIFS or translate Windows/UNC paths. Explicit board-host paths and
+    host-fetched URLs are additional boot inputs; local-file upload is only the fallback."""
 
     SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=accept-new"]
 

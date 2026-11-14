@@ -50,7 +50,10 @@ class MediaBoot:
         """Why this board cannot boot its media this way (None: it can)."""
         strategy = (self.spec.control.get("fdl") or {}).get("strategy", "strapped")
         if strategy != "strapped":
-            return "not needed: a plain reset boots its media (FDL is not strapped)"
+            # On-demand FDL (button), or an explicitly unknown topology, does not imply a strapped boot ROM.
+            # This is independent of whether a relay or a person pulses the controls. `enter-fdl` itself rejects
+            # an unset strategy; a plain reset still just asks the control backend to reset.
+            return "not needed unless FDL is strapped: the control backend and its notification mechanism do not change this"
         if self.spec.control.get("media_boot") is False:
             return "switched off for this DUT (control.media_boot: false)"
         steps = self.cfg.get("steps")
@@ -94,9 +97,21 @@ class MediaBoot:
             raise InvalidRequest(f"{self.spec.id} cannot boot its media: {why}")
         images = self.images()
         t0 = time.monotonic()
-        log(f"{self.name}: reset into download mode")
-        since = runner.console.mark()
-        runner.enter_fdl(log)
-        runner.run_steps(self.cfg["steps"], log, images=images, what=self.name, since=since)
+        log(f"{self.name}: establish the boot ROM's download state")
+        # Current state is not necessarily new console output: a board already sitting in FDL may have printed its
+        # ROM banner before this request. Check retained console output first; only a reset needs a new log window.
+        # This applies equally to relay and human controls (and their different notification/timeout behavior).
+        before = runner.console.read_since(0)
+        try:
+            waiting = runner.fb.state() is not None
+        except Exception:  # no download port is the normal reason to reset, not a stale-log success
+            waiting = False
+        if waiting and before.strip():
+            log(f"{self.name}: the download port is already present; verify the existing ROM state")
+            runner.run_steps(self.cfg["steps"], log, images=images, what=self.name, since=0)
+        else:
+            since = runner.console.mark()
+            runner.enter_fdl(log)
+            runner.run_steps(self.cfg["steps"], log, images=images, what=self.name, since=since)
         log(f"{self.name}: done in {time.monotonic() - t0:.1f}s")
         return {"dut": self.spec.id, "name": self.name, "elapsed_s": round(time.monotonic() - t0, 1)}

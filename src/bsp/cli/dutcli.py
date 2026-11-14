@@ -186,12 +186,14 @@ def dut_cmd(fleet: Fleet, args, book: LeaseBook) -> tuple[Any, str]:
             raise InvalidRequest("give either --sdk SDK or --files F1 [F2 ...]",
                                  hint="--sdk runs the SDK's boot recipe; --files boots these local files in order")
         if args.files:
-            arts = [upload(h, f, out) for f in args.files]
+            # Local files (including absolute ones) remain the upload fallback. host:/... is explicitly on the board
+            # host, unlike a path on this CLI's machine; URLs are fetched by that host.
+            refs = [f if f.startswith(("http://", "https://", "host:")) else upload(h, f, out)["sha256"] for f in args.files]
             r = _ok(h, h.call("dut_boot_files", {
-                "dut": dut, "files": ",".join(a["sha256"] for a in arts), "lease": _lease(args, book, dut),
+                "dut": dut, "files": refs, "lease": _lease(args, book, dut),
                 "reset": not args.no_reset, "first_wait": args.first_wait, "later_wait": args.later_wait,
                 "port_timeout": args.port_timeout}))
-            print(f"{dut} @ {h.id}: boot {len(arts)} file(s) job {r['job']}", file=out, flush=True)
+            print(f"{dut} @ {h.id}: boot {len(refs)} file(s) job {r['job']}", file=out, flush=True)
         else:
             r = _ok(h, h.call("dut_boot", {"dut": dut, "sdk": args.sdk, "method": args.method,
                                             "variant": args.variant, "brk": args.brk, "lease": _lease(args, book, dut)}))
@@ -225,8 +227,8 @@ def dut_cmd(fleet: Fleet, args, book: LeaseBook) -> tuple[Any, str]:
         return r, f"renamed {dut} -> {args.new} on {h.id}" + (f" ({r['note']})" if r.get("note") else "") \
             + "\n" + _status_text(r)
     if c == "set":
-        fields = {k: getattr(args, k) for k in ("board", "soc", "description", "sdks", "usb", "reset_pin",
-                                                 "pulse_ms", "fdl", "fdl_pin")}
+        fields = {k: getattr(args, k) for k in ("board", "soc", "description", "sdks", "usb", "reset_pin", "reset_actor",
+                                                 "pulse_ms", "fdl", "fdl_pin", "fdl_actor")}
         r = _ok(h, h.call("dut_set", {"dut": dut, "lease": _lease(args, book, dut), **fields}, timeout=60))
         return r, f"updated {dut}: {', '.join(r['changed'])}\n" + _status_text(r)
     raise InvalidRequest(f"unknown dut action {c}")
@@ -771,7 +773,8 @@ def add_parsers(sub) -> None:
     b.add_argument("dut")
     b.add_argument("--sdk")
     b.add_argument("--files", nargs="+", metavar="FILE",
-                   help="boot these local files in order, e.g. FSBL.bin u-boot-opensbi.itb Image.itb")
+                   help="boot these files in order; each is a local file (upload fallback), an http(s) URL, or "
+                        "host:/absolute/path on the board host (the host fetches/reads it)")
     b.add_argument("--no-reset", action="store_true", help="--files: the board is already in download mode")
     b.add_argument("--first-wait", type=float, default=8, help="--files: seconds after the first file (default 8)")
     b.add_argument("--later-wait", type=float, default=3, help="--files: seconds after later files (default 3)")
@@ -822,6 +825,8 @@ def add_parsers(sub) -> None:
     st.add_argument("--sdks", help="comma list; '' = all SDKs of the board's SoC")
     st.add_argument("--usb", help="fastboot selector, e.g. usb:2-1.4")
     st.add_argument("--reset-pin", dest="reset_pin")
+    st.add_argument("--reset-actor", choices=["human"], help="clear reset.pin: a person resets (possibly with an FDL relay)")
+    st.add_argument("--fdl-actor", choices=["human"], help="a person coordinates FDL and reset; use with --reset-pin for a reset relay")
     st.add_argument("--pulse-ms", dest="pulse_ms", type=int)
     st.add_argument("--fdl", choices=["strapped", "button", "unset"])
     st.add_argument("--fdl-pin", dest="fdl_pin")
